@@ -51,7 +51,9 @@ The marked tables are also consumed by the offline acceptance rehearsal.
 Expected: **one** AI-labeled offer naming Campus and Local businesses, with
 **Yes, run a round** / **No thanks**. No round starts automatically. Ana clicks
 **Yes, run a round**. The new round shows **0 of 3 have shared a view** and its
-three-minute deadline. The clock starts at acceptance, not at the first chat.
+three-minute deadline. White dots turn green as views are submitted; the dots
+represent counts only, without identifying members or their choices. The clock
+starts at acceptance, not at the first chat.
 
 If detection does not appear, use the fallback in the troubleshooting section
 below; do not spend the recording waiting on a real model.

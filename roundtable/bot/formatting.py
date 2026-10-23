@@ -89,8 +89,21 @@ def starting_text(record: RoundRecord) -> str:
     return text
 
 
+MAX_PROGRESS_DOTS = 10
+
+
+def progress_dots(replied: int, total: int) -> str:
+    # Filled left to right by count only, so no dot ever stands for a member.
+    if total <= MAX_PROGRESS_DOTS:
+        return "\U0001f7e2" * replied + "\u26aa" * (total - replied)
+    filled = round(MAX_PROGRESS_DOTS * replied / total)
+    filled = min(max(filled, 1 if replied else 0), MAX_PROGRESS_DOTS - 1 if replied < total else MAX_PROGRESS_DOTS)
+    return "\u25b0" * filled + "\u25b1" * (MAX_PROGRESS_DOTS - filled)
+
+
 def progress_embed(replied: int, total: int) -> discord.Embed:
     embed = discord.Embed()
+    embed.add_field(name="Views", value=progress_dots(replied, total) or "\u2014", inline=True)
     embed.set_footer(text=f"{replied} of {total} have shared a view")
     return embed
 

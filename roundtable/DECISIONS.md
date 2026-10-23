@@ -567,3 +567,17 @@ References: [Google SDK](https://googleapis.github.io/python-genai/),
    checks explicitly unverified rather than certifying the entire MVP from
    mocks. No live messages, paid requests, Cloud/billing changes, new dependencies,
    environment variables, schema changes, or section 13 features are introduced.
+
+## Vote-progress visual from hosung
+
+- Port only the count-based progress display from `origin/hosung` commit
+  `42fee89`. Keep the existing round message, results, providers, deadlines,
+  controls, and Sumedha detection changes; that branch bundles unrelated work.
+- Use green/white dots for groups of up to ten and the branch's ten-segment bar
+  for larger groups. Keep the exact numeric footer for accessibility and precise
+  counts. An empty group displays a dash. Dots represent counts, never members,
+  options, or reasons. Updates reuse the existing saved-response progress path,
+  so editing a submission does not increase the count.
+- No schema, configuration, persistence, or model-call changes. Tests cover the
+  initial display, private submission updates, edits, empty/full counts, larger
+  groups, and absence of identities/choices/reasons in the progress embed.

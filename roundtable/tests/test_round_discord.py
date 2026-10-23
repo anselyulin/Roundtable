@@ -97,6 +97,8 @@ async def test_decide_defers_and_snapshots_all_visible_nonbot_members(context):
     sent = ctx.channel.send.call_args
     assert sent.args[0].startswith("Roundtable (AI): Starting a private round")
     assert sent.kwargs["embed"].footer.text == "0 of 3 have shared a view"
+    assert sent.kwargs["embed"].fields[0].name == "Views"
+    assert sent.kwargs["embed"].fields[0].value == "\u26aa" * 3
     assert sent.kwargs["view"].is_persistent()
     assert interaction.followup.send.call_args.kwargs["ephemeral"]
     assert record.public_message_id == str(ctx.channel.send.return_value.id)
@@ -147,6 +149,7 @@ async def test_modal_saves_only_complete_submission_and_progress_counts(context)
     assert row.reason == "Private one-liner not yet public." and not row.show_name
     edit = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
     assert set(edit) == {"embed"} and edit["embed"].footer.text == "1 of 3 have shared a view"
+    assert edit["embed"].fields[0].value == "\U0001f7e2" + "\u26aa" * 2
     assert row.reason not in json.dumps(edit["embed"].to_dict())
     ctx.channel.send.assert_not_awaited()
     assert ctx.db.get_round(record.id).status == "collecting"
@@ -478,3 +481,30 @@ def test_public_text_escapes_mentions_markdown_and_links():
     value = formatting.safe("@everyone **text** [document](https://example.org/file) <@123456789012345678>")
     assert "@everyone" not in value and "<@123456789012345678>" not in value
     assert "\\*\\*text\\*\\*" in value and "\\[document\\]" in value
+
+
+@pytest.mark.parametrize("replied, total, expected", [
+    (0, 0, ""), (0, 2, "\u26aa\u26aa"), (2, 2, "\U0001f7e2\U0001f7e2"),
+    (3, 10, "\U0001f7e2" * 3 + "\u26aa" * 7),
+    (1, 40, "\u25b0" + "\u25b1" * 9), (39, 40, "\u25b0" * 9 + "\u25b1"),
+    (40, 40, "\u25b0" * 10), (0, 40, "\u25b1" * 10),
+])
+def test_progress_dots_fill_by_count_and_switch_to_bar_for_large_teams(replied, total, expected):
+    assert formatting.progress_dots(replied, total) == expected
+    embed = formatting.progress_embed(replied, total)
+    assert embed.fields[0].name == "Views"
+    assert embed.fields[0].value == (expected or "\u2014")
+    assert embed.footer.text == f"{replied} of {total} have shared a view"
+
+
+async def test_editing_submission_keeps_progress_visual_counted_once(context):
+    ctx, record = context, context.begin()
+    await submit(ctx, record)
+    await submit(ctx, record, 103)
+    await submit(ctx, record, selection=1, reason="A changed private reason.")
+    embed = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["embed"]
+    assert embed.fields[0].value == "\U0001f7e2\U0001f7e2\u26aa"
+    assert embed.footer.text == "2 of 3 have shared a view"
+    payload = json.dumps(embed.to_dict())
+    for private in ("Ana", "Ben", "Chen", "102", "103", "104", "Campus", "Local businesses", "A changed private reason."):
+        assert private not in payload
