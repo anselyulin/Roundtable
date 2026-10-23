@@ -1,0 +1,7 @@
+discord.py>=2.6,<3
+openai>=2,<3
+google-genai>=1.75,<2
+pydantic>=2.12,<3
+python-dotenv>=1.1,<2
+pytest>=8.4,<10
+pytest-asyncio>=1.2,<2
