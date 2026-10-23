@@ -14,13 +14,17 @@ and its Discord token/provider settings. With the virtual environment activated,
 override only this process from `roundtable/`:
 
 ```sh
-LLM_PROVIDER=fake DETECTION_MODE=auto ROUND_DEADLINE_HOURS=0.05 \
+DETECTION_MODE=auto ROUND_DEADLINE_HOURS=0.05 \
 DETECTION_CONFIDENCE=0.75 DETECTION_COOLDOWN_MIN=15 python -m bot.main
 ```
 
-The bot starts with a three-minute deadline. FakeProvider makes no LLM
-requests and uses no API credits. It recognizes this market conversation and
-returns canned synthesis/clarification; it is not a general language model.
+The bot starts with a three-minute deadline and uses the provider configured in
+`.env`. With `LLM_PROVIDER=vertex`, the demo uses Vertex for automatic detection
+and the other model-backed features. The command deliberately leaves
+`LLM_PROVIDER` unchanged. For an offline demo, set it to `fake` explicitly; that
+provider recognizes explicit choices written as “A or B”, “A vs B”, or “A | B”
+in a message that asks the team to choose, compare, or decide, and returns canned
+responses for other model-backed features.
 
 Use a **fresh test channel** for each recording. Run `/rt-setup` there, verify the
 notice is pinned, and run `/rt-help` to show the pitch privately. If paused, run

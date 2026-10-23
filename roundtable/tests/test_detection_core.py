@@ -64,7 +64,7 @@ async def test_detection_needs_four_messages_and_two_authors_and_only_sends_anon
     assert not ctx.db.connection.execute("SELECT 1 FROM decision_prompts").fetchone()
 
 
-async def test_four_new_messages_and_forty_five_seconds_are_both_required(detector):
+async def test_first_check_needs_four_messages_then_checks_new_messages_after_rate_limit(detector):
     ctx = detector
     ctx.service.provider.complete = AsyncMock(return_value='{"is_decision":false,"confidence":0,"question":"","options":[]}')
     first = feed(ctx)
@@ -76,7 +76,6 @@ async def test_four_new_messages_and_forty_five_seconds_are_both_required(detect
     assert second is not None
     assert await ctx.service.evaluate(second) is None
     ctx.now[0] = T0 + timedelta(seconds=90)
-    assert feed(ctx, authors=(102, 103, 102), texts=TEXTS[:3]) is None
     third = ctx.service.observe(200, 103, TEXTS[3], ctx.now[0])
     assert third is not None
     await ctx.service.evaluate(third)

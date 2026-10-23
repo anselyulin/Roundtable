@@ -38,7 +38,6 @@ class RecentText:
 class Window:
     messages: deque[RecentText] = field(default_factory=lambda: deque(maxlen=15))
     sequence: int = 0
-    checked_sequence: int = 0
     last_check_at: datetime | None = None
     checking: bool = False
 
@@ -122,12 +121,16 @@ class DetectionService:
         window.messages.append(RecentText(str(author_id), text, sent_at, window.sequence))
         if (
             window.checking or not self.can_offer(channel_id, now)
-            or sum(item.sequence > window.checked_sequence for item in window.messages) < 4
+            # Require enough context for the first check. After that, recheck
+            # each new message once the rate limit elapses; requiring four new
+            # messages after every negative result misses decisions that emerge
+            # gradually in ordinary, slower conversations.
+            or window.last_check_at is None and len(window.messages) < 4
             or len({item.author_id for item in window.messages}) < 2
             or window.last_check_at is not None and now - window.last_check_at < CHECK_INTERVAL
         ):
             return None
-        window.checking, window.last_check_at, window.checked_sequence = True, now, window.sequence
+        window.checking, window.last_check_at = True, now
         # Anonymous initials are local to this window; never send Discord ids or
         # display names to the model. Only the numbered recent text is supplied.
         initials = {author: chr(65 + index) for index, author in enumerate(dict.fromkeys(item.author_id for item in window.messages))}

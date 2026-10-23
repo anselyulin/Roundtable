@@ -33,17 +33,11 @@ class CheckedProvider:
 
 
 class FakeProvider:
-    """Canned fixtures only, not a substitute for actual language understanding."""
+    """Deterministic demo fixtures; supports explicit option pairs without an LLM."""
 
     async def complete(self, *, system: str, user: str) -> str:
         if system == prompts.DETECT_DECISION:
-            decision = "which market" in user.casefold()
-            result = {
-                "is_decision": decision,
-                "confidence": 0.95 if decision else 0.0,
-                "question": "Which market should we choose?" if decision else "",
-                "options": ["Campus", "Local businesses"] if decision else [],
-            }
+            result = self._detect_demo_decision(user)
         elif system == prompts.EXTRACT_OPTIONS:
             # A documented, deterministic demo grammar: "Question: A or B" / A | B.
             candidate = user.rsplit(":", 1)[-1].strip().rstrip("?.")
@@ -117,6 +111,48 @@ class FakeProvider:
         else:
             raise ProviderError("Unsupported provider operation.")
         return json.dumps(result, ensure_ascii=False)
+
+    @staticmethod
+    def _detect_demo_decision(user: str) -> dict:
+        """Recognize a plainly stated A-or-B choice in demo chat text."""
+        if "which market" in user.casefold():
+            return {
+                "is_decision": True, "confidence": 0.95,
+                "question": "Which market should we choose?",
+                "options": ["Campus", "Local businesses"],
+            }
+
+        for numbered_line in user.splitlines():
+            match = re.match(r"\s*\d+\.\s+[A-Z]:\s*(.+)", numbered_line)
+            if not match:
+                continue
+            line = match.group(1).strip()
+            if ":" in line:
+                line = line.rsplit(":", 1)[-1].strip()
+            pieces = re.split(r"\s+(?:or|vs\.?|versus)\s+|\s*\|\s*", line, flags=re.I)
+            if not 2 <= len(pieces) <= 4:
+                continue
+            # Drop a conversational lead-in such as “Should we pick” or
+            # “Which should we use” while keeping the option text intact.
+            first = re.sub(
+                r"^.*?\b(?:choose|pick|use|select|go with|compare|decide on)\b\s+",
+                "", pieces[0], flags=re.I,
+            ).strip(" ?!.,:")
+            options = [first, *(piece.strip(" ?!.,:") for piece in pieces[1:])]
+            if any(not option for option in options):
+                continue
+            if not ("?" in line or re.search(r"\b(choose|pick|decide|compare|vote|which)\b", line, re.I)):
+                continue
+            if not re.search(r"\b(choose|pick|decide|compare|vote|which|should)\b", line, re.I) and "?" not in line:
+                continue
+            if any(option.casefold() not in user.casefold() for option in options):
+                continue
+            return {
+                "is_decision": True, "confidence": 0.95,
+                "question": "Which option should the team choose?",
+                "options": options,
+            }
+        return {"is_decision": False, "confidence": 0.0, "question": "", "options": []}
 
 
 class OpenAIProvider:

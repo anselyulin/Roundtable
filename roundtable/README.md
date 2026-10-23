@@ -18,8 +18,8 @@ message and replies privately. Nothing from spec section 13 is built.
 ## Quick setup and demo (target: under 20 minutes)
 
 Start with Python 3.11+, permission to manage a Discord test server, and three
-human participants available. Use FakeProvider for this path; no LLM key, Google
-Cloud setup, or paid model call is needed. The timing is a planning estimate,
+human participants available. The demo uses the provider configured in `.env`;
+with `LLM_PROVIDER=vertex`, it uses your Vertex project, model, and key. The timing is a planning estimate,
 not a measured first-time user result; platform approvals/global sync can take
 longer. **Set a test-server `DISCORD_GUILD_ID` to use guild command sync.**
 
@@ -31,11 +31,11 @@ longer. **Set a test-server `DISCORD_GUILD_ID` to use guild command sync.**
 | 10–12 min | Run the demo command below from `roundtable/`, then `/rt-setup` in a fresh channel visible to exactly the three participants and the bot. Verify the pinned notice. |
 | 12–17 min | Follow [Run the demo](#run-the-demo) and the exact dialogue in [demo/script.md](demo/script.md). End with `/rt-log`. |
 
-With the virtual environment activated, this command overrides only the new
-process, preserving existing `.env` credentials/provider settings:
+With the virtual environment activated, this command overrides only demo timing
+and detection settings. It preserves the provider configured in `.env`:
 
 ```sh
-LLM_PROVIDER=fake DETECTION_MODE=auto ROUND_DEADLINE_HOURS=0.05 \
+DETECTION_MODE=auto ROUND_DEADLINE_HOURS=0.05 \
 DETECTION_CONFIDENCE=0.75 DETECTION_COOLDOWN_MIN=15 python -m bot.main
 ```
 
@@ -541,7 +541,7 @@ The complete recording script, roles, expected messages, relative dates, and
 optional acceptance branches are in [demo/script.md](demo/script.md). All dialogue
 there is invented test material; use no real coursework, files, or private notes.
 
-1. Start the scoped FakeProvider demo command from [Quick setup](#quick-setup-and-demo-target-under-20-minutes). Use a fresh enabled channel and three human members.
+1. Start the demo command from [Quick setup](#quick-setup-and-demo-target-under-20-minutes). It uses the provider selected by `LLM_PROVIDER` in `.env` (including Vertex). Use a fresh enabled channel and three human members.
 2. Send the script's four separate messages as Ana and Ben. Chen initially stays
    quiet. Expect exactly one offer; click **Yes, run a round**.
 3. Ana and Ben privately choose Campus and submit their scripted reasons, with
@@ -558,10 +558,10 @@ there is invented test material; use no real coursework, files, or private notes
 The script also gives separate checks for clarify/feedback, task confirmation and
 done, workload, deadline/timeline posting, aggregate stats, pause/resume, restart
 controls, failed-DM fallback, and deadline closure with a missing member. Relative
-dates prevent the timeline demo from becoming stale. FakeProvider returns canned
-interpretations and synthesis, balances supplied task counts, and produces
-deterministic milestone dates relative to the supplied deadline. It does not
-translate arbitrary languages or establish any real market facts.
+dates prevent the timeline demo from becoming stale. When selected, FakeProvider
+returns canned interpretations and synthesis, balances supplied task counts, and
+produces deterministic milestone dates relative to the supplied deadline. It does
+not translate arbitrary languages or establish any real market facts.
 
 At `ROUND_DEADLINE_HOURS=0.05`, a reminder becomes eligible at +90 seconds and
 sends on the next 60-second tick. Deadline closure happens at +180 seconds or
@@ -571,8 +571,8 @@ deadline clock. Completing a three-minute round via the command fallback is
 useful for a recording, but does not verify automatic detection.
 
 Stop with Ctrl-C after the scoped demo. A later normal `python -m bot.main` uses
-your original settings; keep `LLM_PROVIDER=fake` in `.env` if that is your desired
-ongoing mode. Production rounds normally use `ROUND_DEADLINE_HOURS=24`.
+your `.env` settings without the temporary demo timing overrides. Production
+rounds normally use `ROUND_DEADLINE_HOURS=24`.
 
 ## Troubleshooting
 
@@ -580,10 +580,10 @@ ongoing mode. Production rounds normally use `ROUND_DEADLINE_HOURS=24`.
 | --- | --- |
 | Detection worked once, then stopped | The 15-minute offer cooldown survives resume/restart. No thanks extends it to at least 60 minutes; an unanswered offer also blocks new ones. Use a fresh enabled test channel or wait and send new messages. Keep decision history. |
 | Messages after pause do nothing | Run `/rt-resume` and wait for its private confirmation, then send four new messages from two authors. Messages sent while paused were discarded. Resume does not reset cooldowns. |
-| No automatic offer | Verify the running process uses `DETECTION_MODE=auto`. Send four new, plain-text messages from two humans within 10 minutes; later checks also need 45 seconds. FakeProvider needs the phrase “which market” and both Campus/Local businesses in the window. Attachments/embeds, edits, and bot messages are ignored. |
+| No automatic offer | Verify the running process uses `DETECTION_MODE=auto`. The first check needs four recent plain-text messages from two humans; later checks can run on each new message, at most once every 45 seconds. With FakeProvider, state a concrete choice using “A or B”, “A vs B”, or “A | B” in a message that asks the team to choose, compare, or decide. Attachments/embeds, edits, and bot messages are ignored. |
 | Commands absent | Check the test-server ID, restart to sync, and verify the bot was invited with `applications.commands`. Without guild sync, global propagation can exceed the 20-minute target. |
 | Setup cannot pin | Check effective channel permissions, including Pin Messages. Retry `/rt-setup`; it reuses its saved notice without enabling a new channel until pinning succeeds. |
-| Generic private error | Reproduce with the scoped FakeProvider command to separate bot flow from provider configuration/availability. Check permissions and model/key settings locally; do not paste keys, prompts, model responses, or exception payloads into logs/chat. |
+| Generic private error | To separate bot flow from provider availability, temporarily set `LLM_PROVIDER=fake` for a local reproduction. For Vertex failures, check permissions and model/key settings locally; do not paste keys, prompts, model responses, or exception payloads into logs/chat. |
 | Old preview/rating expires after restart | Timeline previews and clarify-rating receipts are deliberately transient. Run a fresh `/rt-timeline` or ask for another clarification. Persistent round, detection, task, and reopen controls restore. |
 | Need a reliable round trigger now | Use `/rt-decide question:Which market: Campus or Local businesses?`. It bypasses detection/cooldown while respecting setup/pause. |
 
