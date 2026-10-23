@@ -14,7 +14,8 @@ from core.timeline import TimelinePreview
 PITCH = "Every team has someone who quietly turns five opinions into one plan. Roundtable does that job neutrally, so nobody has to, and everybody's view counts."
 
 PAUSED_NOTICE = "Roundtable (AI): Paused by a member. I'm not reading or posting until someone runs /rt-resume."
-RESUMED_NOTICE = "Roundtable (AI): Resumed in this channel."
+RESUMED_NOTICE = "Roundtable (AI): Resumed by a member. I'm active in this channel again, as described in the pinned notice."
+NOT_PAUSED = "Roundtable isn't paused in this channel."
 SETUP_REQUIRED = "Run /rt-setup in this channel first."
 GENERIC_ERROR = "I couldn't do that, please try again"
 
@@ -76,64 +77,122 @@ def share_instructions(record: RoundRecord) -> str:
     return "Choose an option, then Add my reason. Only you can see this form."
 
 
+MAX_PROGRESS_DOTS = 10
+
+
 def starting_text(record: RoundRecord) -> str:
-    deadline = int(datetime.fromisoformat(record.deadline_at).timestamp())
-    text = (
-        f'Roundtable (AI): Starting a private round on "{safe(record.question)}". '
-        'Press "Share my view" and answer in one line, in any language you like. '
-        f"Nobody sees others' answers until everyone has replied, <t:{deadline}:F>, "
-        "or the starter, server owner, or a channel manager ends the round early."
-    )
+    text = "Roundtable (AI): New private round."
     if record.reopened_from is not None:
         text += f" Reopened from decision {record.reopened_from}."
     return text
 
 
-def progress_embed(replied: int, total: int) -> discord.Embed:
-    embed = discord.Embed()
+def progress_dots(replied: int, total: int) -> str:
+    # Filled left to right by count only, so no dot ever stands for a member.
+    if total <= MAX_PROGRESS_DOTS:
+        return "\U0001f7e2" * replied + "\u26aa" * (total - replied)
+    filled = round(MAX_PROGRESS_DOTS * replied / total)
+    filled = min(max(filled, 1 if replied else 0), MAX_PROGRESS_DOTS - 1 if replied < total else MAX_PROGRESS_DOTS)
+    return "\u25b0" * filled + "\u25b1" * (MAX_PROGRESS_DOTS - filled)
+
+
+def round_card(record: RoundRecord, replied: int, total: int) -> discord.Embed:
+    deadline = int(datetime.fromisoformat(record.deadline_at).timestamp())
+    embed = discord.Embed(
+        colour=discord.Colour.blurple(),
+        description=(
+            f"**{safe(record.question)}**\n\n"
+            'Press "Share my view" and answer in one line, in any language you like. '
+            "Nobody sees others' answers until the round closes. "
+            "The starter, server owner, or a channel manager can end it early."
+        ),
+    )
+    embed.add_field(name="Closes", value=f"<t:{deadline}:R> \u00b7 <t:{deadline}:f>", inline=True)
+    embed.add_field(name="Views", value=progress_dots(replied, total) or "\u2014", inline=True)
     embed.set_footer(text=f"{replied} of {total} have shared a view")
     return embed
 
 
+CLOSED_COLOUR, DECIDED_COLOUR = discord.Colour.dark_grey(), discord.Colour.green()
+OUTCOME_PROMPT = "The call is yours. Pick the team's decision below to log it."
+
+
+def spread_lines(result: RoundResult) -> str:
+    if not result.responses:
+        return "No views were shared."
+    # Dots lead each line so they align: every row has the same member count.
+    lines = [
+        f"{progress_dots(count, result.total_members)}  **{count}** \u00b7 {safe(option)}"
+        for option, count in result.counts
+    ]
+    return "\n".join(lines) + f"\n{len(result.responses)} of {result.total_members} shared a view"
+
+
 def result_message(result: RoundResult, names: dict[str, str]) -> dict:
-    content = f'Roundtable (AI): Round on "{safe(result.round.question)}" is closed.'
+    content = "Roundtable (AI): Round closed."
     if result.deadline_missing:
         if result.round.closed_at and datetime.fromisoformat(result.round.closed_at) < datetime.fromisoformat(result.round.deadline_at):
             content += " Ended early."
         content += f" Proceeding with {len(result.responses)} of {result.total_members} views."
-    spread = ", ".join(
-        f"{count} {'leans' if count == 1 else 'lean'} toward {safe(option)}"
-        for option, count in result.counts if count
+    embed = discord.Embed(
+        colour=CLOSED_COLOUR, description=f"**{safe(result.round.question)}**\n\n{spread_lines(result)}",
     )
-    embed = discord.Embed(description=spread + "." if spread else "No views were shared.")
+    # The summary leads: it is the synthesis members would otherwise do by hand.
+    synthesis = (
+        ("Summary", safe(result.synthesis.summary)),
+        ("Key trade-off", safe(result.synthesis.trade_off)),
+        ("Next question", safe(result.synthesis.question)),
+    )
+    for name, value in synthesis:
+        embed.add_field(name=name, value=value, inline=False)
+    # Members' own words follow, grouped by option and kept apart from synthesis.
+    # Anonymous is the default, so only a consented name is appended.
+    groups: dict[str, list[str]] = {}
     for item in result.reasons:
         response = item.response
-        author = names.get(response.user_id, "Member") if response.show_name else "Anonymous"
         reason = safe(item.english)
         if item.english != response.reason:
             reason += f" ({safe(response.reason)})"
-        # These are the member's own words, explicitly distinguished from synthesis.
+        if response.show_name:
+            reason += f" \u2014 {safe(names.get(response.user_id, 'Member'))}"
+        groups.setdefault(response.option_label, []).append("> " + reason)
+    heading = "What members said"
+    for option, quotes in groups.items():
+        text = f"**{safe(option)}**\n" + "\n".join(quotes)
         # Preserve every original/translated character even when escaping pushes
-        # a reason beyond Discord's 1024-character field limit.
-        label = f"{safe(author)} · {safe(response.option_label)}"
-        for offset in range(0, len(reason), 1024):
-            embed.add_field(name=label if offset == 0 else label + " (continued)", value=reason[offset:offset + 1024], inline=False)
-    embed.add_field(name="Minority case", value=safe(result.synthesis.steelman) if result.minority_option else "No dissent raised.", inline=False)
-    embed.add_field(name="Key trade-off", value=safe(result.synthesis.trade_off), inline=False)
-    embed.add_field(name="Next question", value=safe(result.synthesis.question), inline=False)
-    embed.set_footer(text="The call is yours. Pick the outcome to log it.")
+        # a group beyond Discord's 1024-character field limit.
+        for offset in range(0, len(text), 1024):
+            embed.add_field(name=heading, value=text[offset:offset + 1024], inline=False)
+            heading = "\u200b"
+    embed.set_footer(text=OUTCOME_PROMPT)
     # Discord allows 6000 embed characters plus 2000 message characters. Move
-    # synthesis into the message body when a long five-member result needs it.
-    while len(embed) > 6000 and len(embed.fields) >= 3:
-        field = embed.fields[-1]
-        addition = f"\n\n{field.name}: {field.value}"
-        if len(content + addition) > 2000:
+    # synthesis into the message body, above the card, when a long result needs it.
+    moved = []
+    for name, value in reversed(synthesis):
+        if len(embed) <= 6000:
             break
-        content += addition
-        embed.remove_field(-1)
+        index = next(i for i, field in enumerate(embed.fields) if field.name == name)
+        embed.remove_field(index)
+        moved.insert(0, f"\n\n**{name}**\n{value}")
+    content += "".join(moved)
     if len(embed) > 6000 or len(embed.fields) > 25 or len(content) > 2000:
         raise RoundError("capacity")
     return {"content": content, "embed": embed}
+
+
+def decided_embed(embed: discord.Embed, outcome: str) -> discord.Embed:
+    embed = embed.copy()
+    embed.colour = DECIDED_COLOUR
+    embed.set_footer(text=f"\u2705 Decided: {outcome} \u00b7 Saved to /rt-log")
+    return embed
+
+
+def task_added(task, decision: str | None = None) -> str:
+    due = f" \u00b7 due {task.due_at[:10]} UTC" if task.due_at else ""
+    text = f"Roundtable (AI): New task {task.id}: **{safe(task.title)}**{due} \u00b7 unowned."
+    if decision is not None:
+        text += f" From decision: {safe(decision)}."
+    return text + " Use /rt-tasks assign for owner suggestions."
 
 
 def decision_log(entries: tuple[DecisionEntry, ...], names: dict[str, str]) -> discord.Embed:

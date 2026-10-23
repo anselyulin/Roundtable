@@ -63,17 +63,16 @@ class FakeProvider:
                 result = {"option_label": label, "reason": reply}
             else:
                 result = {"option_label": None, "reason": user}
-        elif system == prompts.STEELMAN_MINORITY:
+        elif system == prompts.SUMMARIZE_REASONS:
             try:
                 payload = json.loads(user)
             except (ValueError, TypeError):
                 payload = {}
             reasons = payload.get("reasons", []) if isinstance(payload, dict) else []
-            minority = payload.get("minority_option") if isinstance(payload, dict) else None
-            minority_reason = next((reason["reason"] for reason in reasons if reason["option_label"] == minority), "")
             distinct = list(dict.fromkeys(reason["reason"][:100] for reason in reasons))
+            stated = "; ".join(dict.fromkeys(f'“{reason["reason"][:100]}” ({reason["option_label"]})' for reason in reasons[:5]))
             result = {
-                "steelman": f'The stated case for this idea is: “{minority_reason[:250]}”. That priority deserves consideration alongside the other stated reasons.' if minority_reason else "No dissent raised.",
+                "summary": f"Members gave these reasons: {stated}." if stated else "No views were shared, so there is nothing to summarize.",
                 "trade_off": f'The stated trade-off is between “{distinct[0]}” and “{distinct[1]}”.' if len(distinct) > 1 else "The team can weigh the priority in its stated reason; no competing priority was raised.",
                 "question": "Which of the priorities you raised matters most for this decision?",
             }

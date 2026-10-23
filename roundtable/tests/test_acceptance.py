@@ -153,16 +153,17 @@ async def test_scripted_demo_setup_detection_private_round_result_log_tasks_time
     await share(*views[2])
     assert ctx.db.get_round(1).status == "closed"
     result = ctx.messages[starter_id]
-    assert result["embed"].description == "2 lean toward Campus, 1 leans toward Local businesses."
+    assert result["embed"].description.endswith("\n\n\U0001f7e2\U0001f7e2\u26aa  **2** \u00b7 Campus\n\U0001f7e2\u26aa\u26aa  **1** \u00b7 Local businesses\n3 of 3 shared a view")
     fields = result["embed"].fields
-    assert all(field.name.startswith("Anonymous") for field in fields[:3])
-    assert [field.name for field in fields[-3:]] == ["Minority case", "Key trade-off", "Next question"]
-    assert views[2][2] in fields[-3].value
+    assert [field.name for field in fields[:3]] == ["Summary", "Key trade-off", "Next question"]
+    assert views[2][2] in fields[0].value
+    said = "\n".join(field.value for field in fields[3:])
+    assert all(f"> {reason}" in said for _, _, reason in views) and "\u2014" not in said  # Anonymous by default.
     assert [item.label for item in result["view"].children] == ["Campus", "Local businesses", "None of these"]
-    synthesis_input = json.loads(next(call["user"] for call in calls if call["system"] == prompts.STEELMAN_MINORITY))
-    assert synthesis_input == {"minority_option": "Local businesses", "reasons": [{"option_label": option, "reason": reason} for _, option, reason in views]}
-    assert "recommend" not in " ".join(field.value for field in fields[-3:]).lower()
-    # The human chooses the minority option. The bot never chooses an outcome.
+    synthesis_input = json.loads(next(call["user"] for call in calls if call["system"] == prompts.SUMMARIZE_REASONS))
+    assert synthesis_input == {"reasons": [{"option_label": option, "reason": reason} for _, option, reason in views]}
+    assert "recommend" not in " ".join(field.value for field in fields[:3]).lower()
+    # The human chooses the less popular option. The bot never chooses an outcome.
     assert ctx.db.get_round(1).outcome is None
     await result["view"].children[1].callback(ctx.make(message_id=starter_id))
     assert ctx.db.get_round(1).outcome == "Local businesses" and ctx.db.get_round(1).outcome_at == ctx.now[0].isoformat()
@@ -283,7 +284,7 @@ def test_suite_network_guard_prevents_live_api_connections():
 
 
 @pytest.mark.parametrize("recommendation", ["Pick Campus.", "Campus is the best option.", "We should go with Campus."])
-@pytest.mark.parametrize("field", ["steelman", "trade_off", "question"])
+@pytest.mark.parametrize("field", ["summary", "trade_off", "question"])
 async def test_recommending_result_is_never_published_and_recovers_with_neutral_output(context, recommendation, field, caplog):
     ctx, record = context, context.begin(members=("102", "103"))
     for user_id, selection in ((102, 0), (103, 1)):
@@ -293,9 +294,9 @@ async def test_recommending_result_is_never_published_and_recovers_with_neutral_
     attempts = []
 
     async def recommending(**kwargs):
-        if kwargs["system"] == prompts.STEELMAN_MINORITY:
+        if kwargs["system"] == prompts.SUMMARIZE_REASONS:
             attempts.append(True)
-            return json.dumps({"steelman": "The stated priority deserves consideration.", "trade_off": "The team can weigh access against local contacts.", "question": "Which stated priority matters most?", field: recommendation})
+            return json.dumps({"summary": "The stated priority deserves consideration.", "trade_off": "The team can weigh access against local contacts.", "question": "Which stated priority matters most?", field: recommendation})
         return await original(**kwargs)
 
     ctx.client.provider.complete = recommending
@@ -308,14 +309,14 @@ async def test_recommending_result_is_never_published_and_recovers_with_neutral_
     ctx.client.provider.complete = original
     await ctx.scheduler.tick(now=T0)
     assert record.id not in ctx.ui.pending_results
-    assert ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["embed"].fields[-1].name == "Next question"
+    assert ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["embed"].fields[2].name == "Next question"
 
 
 @pytest.mark.parametrize("operation", ["extract", "clarify", "parse", "synthesis"])
 async def test_rapid_pause_resume_discards_valid_in_flight_round_and_clarify_output(context, operation):
     ctx = context
     target = {"extract": prompts.EXTRACT_OPTIONS, "clarify": prompts.CLARIFY_MESSAGE,
-              "parse": prompts.PARSE_RESPONSE, "synthesis": prompts.STEELMAN_MINORITY}[operation]
+              "parse": prompts.PARSE_RESPONSE, "synthesis": prompts.SUMMARIZE_REASONS}[operation]
     record = None
     if operation in {"parse", "synthesis"}:
         record = ctx.begin(members=("102",))
@@ -401,7 +402,7 @@ def test_setup_and_demo_instructions_have_valid_shell_syntax_and_local_links(doc
 async def test_pause_prevents_new_round_and_clarify_json_attempts(context, operation):
     ctx = context
     target = {"extract": prompts.EXTRACT_OPTIONS, "clarify": prompts.CLARIFY_MESSAGE,
-              "parse": prompts.PARSE_RESPONSE, "synthesis": prompts.STEELMAN_MINORITY}[operation]
+              "parse": prompts.PARSE_RESPONSE, "synthesis": prompts.SUMMARIZE_REASONS}[operation]
     record = None
     if operation in {"parse", "synthesis"}:
         record = ctx.begin(members=("102",))

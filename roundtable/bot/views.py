@@ -62,8 +62,9 @@ class OutcomeView(SafeView):
     def __init__(self, controller, record: RoundRecord, choices: tuple[str, ...]):
         super().__init__(timeout=None)
         for index, choice in enumerate(choices + (NONE,)):
+            chosen = record.outcome is not None and choice == record.outcome
             button = discord.ui.Button(
-                label=choice[:80], style=discord.ButtonStyle.secondary,
+                label=choice[:80], style=discord.ButtonStyle.success if chosen else discord.ButtonStyle.secondary,
                 custom_id=f"rt:round:{record.id}:outcome:{index}", disabled=record.outcome is not None,
             )
 

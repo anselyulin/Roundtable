@@ -8,7 +8,7 @@ import pytest
 from core import prompts
 from core.db import Database, utc_iso
 from core.llm import FakeProvider
-from core.rounds import PreparedQuestion, RoundError, RoundService
+from core.rounds import PreparedQuestion, RoundError, RoundService, duration_suggestions, parse_duration
 
 
 T0 = datetime(2026, 10, 22, 16, tzinfo=timezone.utc)
@@ -115,8 +115,8 @@ async def test_early_close_only_when_everyone_replied(service):
     result = await service.prepare_result(record.id, T0 + timedelta(minutes=2))
     assert closed.status == "closed" and closed.closed_at == utc_iso(T0 + timedelta(minutes=2))
     assert result.counts == (("Campus", 2), ("Local businesses", 1))
-    assert result.minority_option == "Local businesses" and not result.deadline_missing
-    assert "Local contacts" in result.synthesis.steelman
+    assert not result.deadline_missing
+    assert "campus students" in result.synthesis.summary and "Local contacts" in result.synthesis.summary
 
 
 async def test_deadline_closes_missing_views_and_prevents_late_edits(service):
@@ -140,7 +140,7 @@ async def test_no_replies_closes_without_llm_or_invented_dissent(service):
     result = await service.prepare_result(record.id, T0 + timedelta(days=1))
     closed = service.close_prepared(result, T0 + timedelta(days=1))
     assert closed.status == "closed" and result.deadline_missing
-    assert result.minority_option is None and not result.reasons
+    assert not result.reasons and "nothing to summarize" in result.synthesis.summary
     service.provider.complete.assert_not_awaited()
 
 
@@ -157,8 +157,8 @@ async def test_synthesis_receives_only_stored_reasons_no_identity_or_chat(servic
 
     service.provider.complete = spy
     result = await service.prepare_result(record.id, T0)
-    payload = json.loads(next(call["user"] for call in calls if call["system"] == prompts.STEELMAN_MINORITY))
-    assert set(payload) == {"minority_option", "reasons"}
+    payload = json.loads(next(call["user"] for call in calls if call["system"] == prompts.SUMMARIZE_REASONS))
+    assert set(payload) == {"reasons"}
     assert payload["reasons"] == [
         {"option_label": "Campus", "reason": "Campus access is easier."},
         {"option_label": "Local businesses", "reason": "Local contacts are available."},
@@ -166,7 +166,6 @@ async def test_synthesis_receives_only_stored_reasons_no_identity_or_chat(servic
     assert "102" not in json.dumps(payload) and "103" not in json.dumps(payload)
     assert "Campus access" in result.synthesis.trade_off and "Local contacts" in result.synthesis.trade_off
     assert result.synthesis.question and "recommend" not in result.synthesis.model_dump_json().lower()
-    assert result.minority_option == "Campus"  # First option breaks a tie.
 
 
 async def test_translated_reason_is_temporary_and_original_is_kept(service):
@@ -184,7 +183,6 @@ async def test_translated_reason_is_temporary_and_original_is_kept(service):
     assert result.reasons[0].english == "Campus is more convenient."
     assert result.reasons[0].response.reason == "校园更方便。"
     assert "Campus is more convenient." not in "\n".join(service.db.connection.iterdump())
-    assert result.minority_option is None
 
 
 async def test_outcome_timestamp_owner_and_time_to_decision_once(service):
@@ -271,9 +269,9 @@ async def test_invalid_and_recommending_synthesis_retry_then_fail_quietly(servic
 
     async def unsafe(**kwargs):
         nonlocal failures
-        if kwargs["system"] == prompts.STEELMAN_MINORITY:
+        if kwargs["system"] == prompts.SUMMARIZE_REASONS:
             failures += 1
-            return json.dumps({"steelman": "I recommend Campus", "trade_off": "private-invalid-output", "question": "Choose?"})
+            return json.dumps({"summary": "I recommend Campus", "trade_off": "private-invalid-output", "question": "Choose?"})
         return await original(**kwargs)
 
     service.provider.complete = unsafe
@@ -291,3 +289,22 @@ async def test_stale_synthesis_cannot_close_changed_response(service):
     with pytest.raises(RoundError, match="stale"):
         service.close_prepared(prepared, T0 + timedelta(seconds=1))
     assert service.db.get_round(record.id).status == "collecting"
+
+
+@pytest.mark.parametrize("text, hours", [
+    ("1h", 1), ("36h", 36), ("2d", 48), ("1w", 168), ("90m", 1.5), ("1 hour", 1), ("3 Days", 72), ("1.5h", 1.5),
+])
+def test_parse_duration_accepts_relative_lengths(text, hours):
+    assert parse_duration(text) == pytest.approx(hours)
+
+
+@pytest.mark.parametrize("text", ["", "soon", "1", "h", "-1h", "4m", "31d", "5 weeks", "2026-10-30"])
+def test_parse_duration_rejects_bad_or_out_of_range_lengths(text):
+    with pytest.raises(RoundError) as error:
+        parse_duration(text)
+    assert error.value.code == "round_deadline"
+
+
+@pytest.mark.parametrize("text", ["5", "1", "2.5", "45", "900", "5 da", "3 hrs", "10 min", "day"])
+def test_every_duration_suggestion_is_accepted(text):
+    assert all(parse_duration(value) for _, value in duration_suggestions(text))

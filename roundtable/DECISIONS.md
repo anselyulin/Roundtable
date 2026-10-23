@@ -15,9 +15,11 @@
    text are never persisted or logged. Step 1 writes channel settings only.
 3. **Pause vs help/setup.** The strict silence rule wins while paused: setup and
    help return only the exact one-line paused confirmation, ephemerally. Setup
-   never clears pause; only resume does. Resume confirms ephemerally. Pause posts
-   a normal channel message and removes its deferred private reply, avoiding
-   public interaction attribution of the caller. Failed public confirmation
+   never clears pause; only resume does. Pause and resume both post a normal
+   channel message and remove the deferred private reply, avoiding public
+   interaction attribution of the caller. Resume is public so nobody believes the
+   bot is still silent after another member quietly resumes it; resuming an
+   unpaused channel replies privately and posts nothing. Failed public confirmation
    leaves pause in effect and confirms privately. Control actions are serialized
    per channel to prevent setup posting after a completed pause.
 4. **Bootstrap help.** Private help is available before setup so members can find
@@ -567,3 +569,51 @@ References: [Google SDK](https://googleapis.github.io/python-genai/),
    checks explicitly unverified rather than certifying the entire MVP from
    mocks. No live messages, paid requests, Cloud/billing changes, new dependencies,
    environment variables, schema changes, or section 13 features are introduced.
+
+## Live-testing changes
+
+1. **Public resume.** `/rt-resume` posts an anonymous one-line channel notice,
+   like pause, so nobody believes the bot is still silent after another member
+   quietly resumes it. Resuming an unpaused channel replies privately only.
+2. **Per-round deadline.** `/rt-decide` takes an optional `deadline` of relative
+   length only (`90m`, `36h`, `2d`, `1w`, `1 hour`), bounded to 5 minutes–30
+   days and validated before any model call. Autocomplete offers 1 hour, 6
+   hours, 1 day, 3 days, and 1 week; a typed number suggests each unit that
+   fits the bounds ("5" offers 5 hours, 5 days, 5 minutes), and a partial unit
+   narrows it ("5 da" offers 5 days). Absolute dates are deferred: Discord does
+   not expose a member's timezone. Omitted, `ROUND_DEADLINE_HOURS` applies.
+   Detected and reopened rounds keep the default. Reminders stay at halfway of
+   each round's own span. No schema change: `deadline_at` already stores it.
+3. **Round card.** Deliberate departure from spec 7.3 step 2's exact wording.
+   The starter content is a short AI-labelled line; an embed carries the
+   question, instructions, a relative and absolute close time, and progress
+   dots. Dots fill left to right by count only and never map to members; above
+   10 members a 10-segment bar replaces them. The spec's `{n} of {m} have shared
+   a view` footer is kept verbatim. Startup refresh upgrades old starters.
+4. **Summary replaces the minority steelman.** Deliberate departure from spec
+   7.3 step 6 and section 8. `SUMMARIZE_REASONS` returns `summary`, `trade_off`,
+   and `question`: a neutral 2-3 sentence synthesis of every reason, which is
+   the work the bot automates for the team. To keep the steelman's protective
+   intent, the prompt requires fair weight per chosen option regardless of
+   count and forbids dropping minority views; the same neutrality validator
+   applies. The prompt receives only option labels and reasons (no minority
+   field, no identities). Reasons are labelled by option alone; "Anonymous" is
+   implied by default and only a consented name is appended.
+5. **Result card layout.** The starter line is `Roundtable (AI): Round closed.`
+   (plus the spec's `Proceeding with n of m views.` when views are missing); the
+   question moves into the card. The spec's spread sentence becomes per-option
+   dot rows with counts, dots first so rows align. Synthesis leads; members'
+   words follow under one "What members said" heading, grouped by option, still
+   chunked at 1024 characters without dropping text. On overflow, synthesis
+   moves above the card into the message body. The closing line becomes "The
+   call is yours. Pick the team's decision below to log it." Status colours:
+   blurple collecting, grey closed, green decided. Logging an outcome recolours
+   the existing embed (from the clicked message, or fetched on restart
+   reconciliation) and highlights the chosen button; it never re-runs synthesis
+   and names nobody publicly.
+6. **Public task additions.** `/rt-tasks add` and the Turn into tasks form post
+   an AI-labelled channel message (title, optional due date, unowned, linked
+   decision) instead of a private acknowledgement, because tasks are shared
+   team work. Like pause, it is a normal post, so the adder is not named; if
+   posting fails the task is still saved and the text is sent privately.
+   Preference notes stay private.

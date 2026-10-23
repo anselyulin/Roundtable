@@ -9,7 +9,7 @@ import sqlite3
 import pytest
 
 from bot.commands import ERROR_TEXT
-from bot.formatting import PAUSED_NOTICE
+from bot.formatting import PAUSED_NOTICE, RESUMED_NOTICE
 from bot.main import RoundtableClient
 from core.db import Database
 from core.llm import FakeProvider
@@ -216,7 +216,7 @@ async def test_pause_clears_window_and_discards_in_flight_check_even_after_resum
     await ctx.client.handlers.resume(ctx.make())
     finish.set()
     await running
-    assert ctx.channel.send.await_count == 1  # Pause confirmation only.
+    assert [call.args[0] for call in ctx.channel.send.await_args_list] == [PAUSED_NOTICE, RESUMED_NOTICE]  # Pause/resume notices only.
     assert not metric(ctx, "prompts_shown") and not ctx.db.published_prompt_ids()
 
 

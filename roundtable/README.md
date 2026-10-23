@@ -172,13 +172,13 @@ an hour to appear. Restart after changing the sync target.
 | --- | --- |
 | `/rt-setup` | Enable this channel; post/update and pin its notice. Requires Manage Channels or server ownership. |
 | `/rt-pause` | Any channel member can pause; posts the exact anonymous one-line confirmation. |
-| `/rt-resume` | Any channel member can resume; confirms privately. |
+| `/rt-resume` | Any channel member can resume; posts an anonymous one-line public notice so the team knows the bot is active again. Resuming an unpaused channel only replies privately. |
 | `/rt-help` | Private command list, beginning with the required pitch line. |
-| `/rt-decide question:<text>` | Start a private-first decision round for all visible non-bot channel members. |
+| `/rt-decide question:<text> deadline:<length, optional>` | Start a private-first decision round for all visible non-bot channel members. `deadline` takes a length such as `1h`, `36h`, `2d`, or `1w` (5 minutes to 30 days; autocomplete suggests presets, and typing a number such as `5` suggests 5 hours, 5 days, and so on). Omit it to use `ROUND_DEADLINE_HOURS`. |
 | `/rt-log` | Private list of the channel's last 10 closed decisions: question, outcome or “open outcome”, owner, date. |
 | `/re-open` | Browse the channel's previous decisions privately; reopen one with the same options or add a new option. |
 | **Ask Roundtable privately** (message context menu) | Explain only the selected message, privately; optionally rate the answer Helpful / Not helpful. |
-| `/rt-tasks add title:<text> due:<YYYY-MM-DD, optional>` | Add a member-written task, unowned and unconfirmed. |
+| `/rt-tasks add title:<text> due:<YYYY-MM-DD, optional>` | Add a member-written task, unowned and unconfirmed. The channel sees an AI-labelled announcement that does not name who added it. |
 | `/rt-tasks list` | Private paginated task board, open/done totals, and confirmed open task counts per current member. |
 | `/rt-tasks assign` | Public owner suggestions with Confirm, Confirm all, and Swap controls. |
 | `/rt-tasks prefs note:<text>` | Save only your own private preference note for owner suggestions. |
@@ -198,8 +198,11 @@ reused. Setup never silently resumes a paused channel.
 ## Decision rounds
 
 1. Run `/rt-decide question:Which market: Campus or Local businesses?`.
-   Questions are limited to 300 characters. The public message contains only the
-   question, deadline, Share my view / End round early buttons, and counts of submitted views.
+   Questions are limited to 300 characters. Add `deadline:2d` (or pick a preset)
+   to change how long the round stays open. The public card contains only the
+   question, when it closes (relative and exact, in each viewer's local time),
+   Share my view / End round early buttons, and progress dots plus a count of
+   submitted views. Dots fill by count only and never identify members.
 2. Press **Share my view**. The form is ephemeral. For questions with stated
    options, choose one, optionally toggle **Show my name** (off by default), then
    press **Add my reason** and enter a required reason of at most 300 characters.
@@ -226,16 +229,21 @@ reused. Setup never silently resumes a paused channel.
 5. At halfway, missing members receive one DM reminder. If a DM fails, one
    channel message mentions all members still missing. DMs are reminders only;
    submissions never use DMs. Only missing members may be mentioned by this post.
-6. Closure replaces the starter with one result: spread, anonymous reasons
-   (names only by explicit consent), minority steelman, key trade-off, and next
-   question. Non-English reasons include temporary English rendering plus the
-   stored original. Synthesis sees only members' reasons and option labels, with
+6. Closure replaces the starter with one grey result card: the question, the
+   spread as per-option dots and counts, then a neutral **Summary** of all
+   reasons (keeping minority views), **Key trade-off**, and **Next question**,
+   then **What members said**: members' own words quoted and grouped by option,
+   with a name appended only by explicit consent. Non-English reasons include
+   temporary English rendering plus the stored original. Synthesis sees only
+   members' reasons and option labels, with
    no identities, surrounding chat, outside facts, or option recommendation.
 7. Any channel member can click an outcome, including **None of these**. The
-   first click records `outcome`, `owner_user_id`, and `outcome_at` and disables
-   all outcome buttons. `/rt-log` never shows reasons or voting records. The
+   first click records `outcome`, `owner_user_id`, and `outcome_at`, disables
+   all outcome buttons, highlights the chosen one, and turns the card green with
+   **✅ Decided: …** (the card is recoloured, never regenerated). `/rt-log` never shows reasons or voting records. The
    **Turn into tasks** button opens a form for a member-written task linked to
-   that decision; it does not generate tasks or assign an owner automatically.
+   that decision and announces it in the channel; it does not generate tasks or
+   assign an owner automatically.
 
 Pause suppresses round forms, submissions, synthesis publication, and reminders.
 Deadlines remain absolute UTC times. After resume, an expired round closes on the
@@ -550,7 +558,7 @@ there is invented test material; use no real coursework, files, or private notes
 4. Chen waits for the halfway reminder, then privately chooses Local businesses
    and shares the two existing shop-owner contacts before the three-minute
    deadline. All three responses close the round immediately. The result shows
-   the 2–1 spread, anonymous reasons, minority case, trade-off, and next question.
+   the 2–1 spread, anonymous reasons, summary, trade-off, and next question.
 5. The humans decide that Chen's access changes their choice. A human selects
    **Local businesses**; the bot never recommends it. Finish the scene with
    `/rt-log`, showing the saved outcome privately without reasons or vote records.
@@ -579,7 +587,7 @@ ongoing mode. Production rounds normally use `ROUND_DEADLINE_HOURS=24`.
 | Symptom | Check/action |
 | --- | --- |
 | Detection worked once, then stopped | The 15-minute offer cooldown survives resume/restart. No thanks extends it to at least 60 minutes; an unanswered offer also blocks new ones. Use a fresh enabled test channel or wait and send new messages. Keep decision history. |
-| Messages after pause do nothing | Run `/rt-resume` and wait for its private confirmation, then send four new messages from two authors. Messages sent while paused were discarded. Resume does not reset cooldowns. |
+| Messages after pause do nothing | Run `/rt-resume` and wait for its public "Resumed by a member" notice, then send four new messages from two authors. Messages sent while paused were discarded. Resume does not reset cooldowns. |
 | No automatic offer | Verify the running process uses `DETECTION_MODE=auto`. Send four new, plain-text messages from two humans within 10 minutes; later checks also need 45 seconds. FakeProvider needs the phrase “which market” and both Campus/Local businesses in the window. Attachments/embeds, edits, and bot messages are ignored. |
 | Commands absent | Check the test-server ID, restart to sync, and verify the bot was invited with `applications.commands`. Without guild sync, global propagation can exceed the 20-minute target. |
 | Setup cannot pin | Check effective channel permissions, including Pin Messages. Retry `/rt-setup`; it reuses its saved notice without enabling a new channel until pinning succeeds. |
@@ -603,7 +611,7 @@ of every possible model response.
 | --- | --- | --- |
 | 1. Setup, 3+ people, detection offer → Yes → round | Automated pass; live-server check pending | `test_acceptance.py::test_scripted_demo_setup_detection_private_round_result_log_tasks_timeline_and_stats` pins setup, feeds the exact four demo lines from two authors among three members, checks one offer/no automatic round, then accepts it. Live three-person run has not been repeated in this audit. |
 | 2. Ephemeral sharing, no pre-close answer exposure | Pass (automated) | Rehearsal drives select → modal → gateway submission for all three members and scans every public send/edit before close; `test_round_discord.py` checks private ownership, edits, and consent. |
-| 3. Spread, anonymous/opted-in reasons, minority case, outcome buttons | Pass (automated) | Rehearsal checks the 2–1 result and minority reason; `test_round_discord.py::test_all_replies_close_once_with_full_result_and_outcomes` verifies explicit name consent. |
+| 3. Spread, anonymous/opted-in reasons, summary, outcome buttons | Pass (automated) | Rehearsal checks the 2–1 result and minority reason; `test_round_discord.py::test_all_replies_close_once_with_full_result_and_outcomes` verifies explicit name consent. |
 | 4. Outcome persisted and visible in log | Pass (automated) | Rehearsal selects the minority option as a human, checks `outcome_at` and `/rt-log`, and verifies no reasons/votes appear; targeted tests check duplicate clicks. |
 | 5. Selected-message clarify is private | Pass (automated) | Rehearsal invokes the registered context-menu callback and feedback without a public event; `test_clarify_discord.py` checks selected-only intake, ownership, and DB/file/log privacy. |
 | 6. Add/propose/confirm tasks and show workload | Pass (automated) | Rehearsal adds two tasks, requires confirmation, checks per-member counts, then completes one; `test_tasks_core.py` / `test_tasks_discord.py` cover swaps, expiry, late counters, and races. |

@@ -57,7 +57,7 @@ def test_factory_selects_vertex_lazily_and_preserves_other_providers(vertex_sdk,
     (prompts.DETECT_DECISION, "Which market should we choose?", Detection),
     (prompts.EXTRACT_OPTIONS, "Which market: Campus or Local businesses?", ExtractedOptions),
     (prompts.PARSE_RESPONSE, json.dumps({"options": ["Campus"], "reply": "Campus is nearby."}), ParsedResponse),
-    (prompts.STEELMAN_MINORITY, json.dumps({"minority_option": "Campus", "reasons": [
+    (prompts.SUMMARIZE_REASONS, json.dumps({"minority_option": "Campus", "reasons": [
         {"option_label": "Campus", "reason": "Campus is nearby."},
         {"option_label": "Local businesses", "reason": "We have local contacts."},
     ]}), Synthesis),

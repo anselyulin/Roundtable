@@ -6,7 +6,7 @@ import discord
 import pytest
 
 from bot.commands import ChannelCommands
-from bot.formatting import HELP_TEXT, PAUSED_NOTICE, PITCH, RESUMED_NOTICE, SETUP_REQUIRED, TRANSPARENCY_NOTICE
+from bot.formatting import HELP_TEXT, NOT_PAUSED, PAUSED_NOTICE, PITCH, RESUMED_NOTICE, SETUP_REQUIRED, TRANSPARENCY_NOTICE
 from core.db import Database
 
 
@@ -146,12 +146,44 @@ async def test_resume_is_available_to_any_member_and_is_channel_scoped(db, inter
     db.set_paused(201, True)
     interaction.channel.permissions_for.return_value.manage_channels = False
     interaction.channel.send.reset_mock()
+    interaction.followup.send.reset_mock()
+    interaction.delete_original_response.reset_mock()
+
+    async def send(*args, **kwargs):
+        assert db.get_channel(200).active  # Resume takes effect before the announcement.
+
+    interaction.channel.send.side_effect = send
     await handlers.resume(interaction)
     assert db.get_channel(200).active
     assert db.get_channel(201).paused
+    interaction.channel.send.assert_awaited_once_with(RESUMED_NOTICE, allowed_mentions=ANY)
+    assert interaction.channel.send.call_args.kwargs["allowed_mentions"].to_dict() == {"parse": []}
+    interaction.followup.send.assert_not_awaited()
+    interaction.delete_original_response.assert_awaited_once()
+    assert str(interaction.user.id) not in RESUMED_NOTICE
+    assert "\n" not in RESUMED_NOTICE and RESUMED_NOTICE.startswith("Roundtable (AI):")
+
+
+async def test_resume_when_not_paused_replies_privately_without_posting(db, interaction):
+    handlers = ChannelCommands(db)
+    await handlers.setup(interaction)
+    interaction.channel.send.reset_mock()
+    await handlers.resume(interaction)
+    assert db.get_channel(200).active
+    interaction.channel.send.assert_not_awaited()
+    assert interaction.followup.send.call_args.args[0] == NOT_PAUSED
+    assert interaction.followup.send.call_args.kwargs["ephemeral"]
+
+
+async def test_resume_post_failure_still_resumes_and_confirms_privately(db, interaction):
+    handlers = ChannelCommands(db)
+    await handlers.setup(interaction)
+    await handlers.pause(interaction)
+    interaction.channel.send.side_effect = http_error()
+    await handlers.resume(interaction)
+    assert db.get_channel(200).active
     assert interaction.followup.send.call_args.args[0] == RESUMED_NOTICE
     assert interaction.followup.send.call_args.kwargs["ephemeral"]
-    interaction.channel.send.assert_not_awaited()
 
 
 @pytest.mark.parametrize("command", ["pause", "resume"])

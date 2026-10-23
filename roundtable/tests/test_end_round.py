@@ -81,7 +81,8 @@ async def test_end_button_authorizes_starter_or_channel_control_and_publishes_re
     payload = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
     assert "Ended early. Proceeding with 1 of 3 views." in payload["content"]
     assert payload["content"].startswith("Roundtable (AI):")
-    assert payload["embed"].fields[0].name.startswith("Anonymous")
+    assert payload["embed"].fields[3].name == "What members said"
+    assert payload["embed"].fields[3].value.startswith("**Campus**\n> ")  # Anonymous by default.
     assert [button.label for button in payload["view"].children] == ["Campus", "Local businesses", "None of these"]
     assert interaction.followup.send.call_args.kwargs["ephemeral"]
     await ctx.ui.log_outcome(ctx.make(), record.id, 1)
@@ -152,7 +153,8 @@ async def test_old_round_controls_upgrade_after_restart_and_wait_while_paused(co
         await restarted.scheduler.tick(now=T0)
         payload = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
         assert any(button.label == "End round early" for button in payload["view"].children)
-        assert "ends the round early" in payload["content"]
+        assert payload["content"].startswith("Roundtable (AI):")
+        assert "end it early" in payload["embed"].description and payload["embed"].footer.text == "0 of 3 have shared a view"
         assert record.id not in restarted.rounds_ui.pending_share_views
         interaction = ctx.make()
         interaction.client = restarted

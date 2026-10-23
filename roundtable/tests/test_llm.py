@@ -25,7 +25,7 @@ async def test_fake_detection_is_deterministic_and_valid(text, expected):
 @pytest.mark.parametrize("template,keys", [
     (prompts.EXTRACT_OPTIONS, {"question", "options"}),
     (prompts.PARSE_RESPONSE, {"option_label", "reason"}),
-    (prompts.STEELMAN_MINORITY, {"steelman", "trade_off", "question"}),
+    (prompts.SUMMARIZE_REASONS, {"summary", "trade_off", "question"}),
     (prompts.CLARIFY_MESSAGE, {"meaning", "terms", "other_readings", "follow_up_question"}),
     (prompts.PROPOSE_OWNERS, {"assignments"}),
     (prompts.BUILD_TIMELINE, {"milestones"}),

@@ -122,11 +122,12 @@ async def test_each_answer_appears_in_neutral_result_and_outcome_log(context):
     await save(ctx, record, "Weekly check-ins", user_id=104, reason="We can resolve questions together.")
     assert ctx.db.get_round(record.id).status == "closed"
     payload = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
-    assert "2 lean toward Weekly check-ins" in payload["embed"].description
-    assert "1 leans toward Async updates" in payload["embed"].description
+    assert "**2** \u00b7 Weekly check-ins" in payload["embed"].description
+    assert "**1** \u00b7 Async updates" in payload["embed"].description
     assert [button.label for button in payload["view"].children] == ["Weekly check-ins", "Async updates", "None of these"]
-    assert all(field.name.startswith("Anonymous") for field in payload["embed"].fields[:3])
-    assert "Written updates" in payload["embed"].fields[-3].value
+    groups = [field.value.split("\n")[0] for field in payload["embed"].fields[3:]]
+    assert groups == ["**Weekly check-ins**", "**Async updates**"]  # Replies grouped by answer.
+    assert "Written updates" in payload["embed"].fields[0].value
     await ctx.ui.log_outcome(ctx.make(), record.id, 1)
     logged = ctx.db.get_round(record.id)
     assert logged.outcome == "Async updates" and logged.outcome_at

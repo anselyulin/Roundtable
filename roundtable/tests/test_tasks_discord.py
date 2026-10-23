@@ -9,7 +9,7 @@ import discord
 import pytest
 
 from bot.commands import ERROR_TEXT
-from bot.formatting import GENERIC_ERROR, PAUSED_NOTICE
+from bot.formatting import GENERIC_ERROR, PAUSED_NOTICE, RESUMED_NOTICE
 from bot.main import RoundtableClient
 from bot.views import TaskButton, TaskFlowButton, TaskPageButton, TaskSwapSelect, TASK_MODAL_PATTERN, TimelinePostButton
 from core.db import Database
@@ -43,14 +43,22 @@ async def test_registered_groups_have_exact_step_five_subcommands(context):
     assert [parameter.name for parameter in ctx.client.tree.get_command("rt-tasks").get_command("add").parameters] == ["title", "due"]
 
 
-async def test_add_and_preference_acknowledge_privately_and_do_not_call_llm(context):
+async def test_add_is_announced_publicly_and_preference_stays_private_without_llm(context):
     ctx = context
     ctx.client.tasks.provider.complete = AsyncMock()
     interaction = ctx.make()
     await ctx.client.tasks_ui.add(interaction, "Arrange team review", "2026-12-31")
     interaction.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
-    assert interaction.followup.send.call_args.kwargs["ephemeral"]
     assert ctx.db.get_task(1).status == "proposed" and ctx.db.get_task(1).owner_user_id is None
+    post = ctx.channel.send.call_args
+    assert post.args[0] == (
+        "Roundtable (AI): New task 1: **Arrange team review** \u00b7 due 2026-12-31 UTC \u00b7 unowned. "
+        "Use /rt-tasks assign for owner suggestions."
+    )
+    assert post.kwargs["allowed_mentions"].to_dict() == {"parse": []} and "Ana" not in post.args[0]
+    interaction.delete_original_response.assert_awaited_once()
+    interaction.followup.send.assert_not_awaited()
+    ctx.channel.send.reset_mock()
     note = "PRIVATE_PREFERENCE_ONLY_18372"
     preference = ctx.make(103)
     await ctx.client.tasks_ui.prefs(preference, note)
@@ -259,7 +267,11 @@ async def test_outcome_button_opens_member_written_linked_task_modal(context):
     await ctx.client.on_interaction(submitted)
     task = ctx.db.get_task(1)
     assert task.round_id == record.id and task.created_by == "103" and task.owner_user_id is None and task.status == "proposed"
-    assert submitted.followup.send.call_args.kwargs["ephemeral"]
+    assert ctx.channel.send.call_args.args[0] == (
+        "Roundtable (AI): New task 1: **Arrange team review** \u00b7 unowned. From decision: Campus. "
+        "Use /rt-tasks assign for owner suggestions."
+    )
+    submitted.delete_original_response.assert_awaited_once()
 
 
 async def test_private_task_modal_body_is_unread_when_paused_or_wrong_member(context):
@@ -297,7 +309,7 @@ async def test_pause_and_resume_during_assign_discards_output_and_blocks_retry(c
     await job
     assert ctx.client.tasks.provider.complete.await_count == 1
     assert ctx.db.get_task(1).owner_user_id is None
-    assert ctx.channel.send.await_count == 1  # Pause confirmation only.
+    assert [call.args[0] for call in ctx.channel.send.await_args_list] == [PAUSED_NOTICE, RESUMED_NOTICE]  # Pause/resume notices only.
 
 
 @pytest.mark.parametrize("action", ["add", "prefs", "list", "assign", "done", "deadline", "timeline", "stats"])
@@ -375,7 +387,7 @@ async def test_linked_task_modal_opened_before_restart_can_be_submitted(context,
         submitted.client, submitted.type = client, discord.InteractionType.modal_submit
         await client.on_interaction(submitted)
         assert restored.get_task(1).round_id == record.id and restored.get_task(1).title == "Compare choices"
-        assert submitted.followup.send.call_args.kwargs["ephemeral"]
+        assert ctx.channel.send.call_args.args[0].startswith("Roundtable (AI): New task 1: **Compare choices**")
     finally:
         await client.close()
         restored.close()
@@ -397,3 +409,13 @@ async def test_step_five_inputs_and_private_model_output_do_not_leak_to_logs_or_
     assert sentinel.encode() not in snapshot.read_bytes()
     ctx.channel.history.assert_not_called()
     ctx.channel.fetch_message.assert_not_called()
+
+
+async def test_task_announcement_failure_falls_back_to_private_reply(context):
+    ctx = context
+    ctx.channel.send.side_effect = discord.Forbidden(SimpleNamespace(status=403, reason="No access"), {"message": "", "code": 0})
+    interaction = ctx.make()
+    await ctx.client.tasks_ui.add(interaction, "Arrange team review")
+    assert ctx.db.get_task(1) is not None
+    assert interaction.followup.send.call_args.args[0].startswith("Roundtable (AI): New task 1:")
+    assert interaction.followup.send.call_args.kwargs["ephemeral"]

@@ -18,3 +18,9 @@ __pycache__/
 *.log
 *.pem
 *.key
+
+# Course material stays local; the repo is public.
+docs/competition/
+# Video build output and dependencies.
+video/out/
+video/**/node_modules/

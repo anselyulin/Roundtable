@@ -92,7 +92,7 @@ Expected: the starter becomes one AI-labeled result with:
 
 - **2 lean toward Campus, 1 leans toward Local businesses.**
 - Three anonymous reasons, including Chen's concrete access to shop owners.
-- A minority case quoting that stated reason, a key trade-off, a next question,
+- A summary that includes that stated reason, a key trade-off, a next question,
   and **The call is yours. Pick the outcome to log it.**
 - Campus, Local businesses, and None of these outcome buttons.
 

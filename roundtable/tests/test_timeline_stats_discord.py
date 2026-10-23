@@ -10,7 +10,7 @@ import pytest
 
 from bot import formatting
 from bot.commands import ERROR_TEXT
-from bot.formatting import GENERIC_ERROR, PAUSED_NOTICE
+from bot.formatting import GENERIC_ERROR, PAUSED_NOTICE, RESUMED_NOTICE
 from bot.main import RoundtableClient
 from bot.views import TimelinePostButton
 from core.db import Database, utc_iso
@@ -102,7 +102,7 @@ async def test_pause_discards_timeline_and_invalidates_old_private_preview(conte
     resumed = ctx.make()
     await button.callback(resumed)
     assert resumed.followup.send.call_args.args[0] == ERROR_TEXT["timeline_preview"]
-    assert ctx.channel.send.await_count == 1  # Pause notice, no timeline.
+    assert [call.args[0] for call in ctx.channel.send.await_args_list] == [PAUSED_NOTICE, RESUMED_NOTICE]  # Pause/resume notices only.
 
 
 async def test_pause_resume_during_timeline_model_discards_result_and_prevents_retry(context):
@@ -125,7 +125,7 @@ async def test_pause_resume_during_timeline_model_discards_result_and_prevents_r
     await job
     assert ctx.client.timeline.provider.complete.await_count == 1
     assert not ctx.client.timeline._previews
-    assert ctx.channel.send.await_count == 1
+    assert [call.args[0] for call in ctx.channel.send.await_args_list] == [PAUSED_NOTICE, RESUMED_NOTICE]  # Pause/resume notices only.
 
 
 async def test_timeline_preview_expires_after_restart_but_callback_gives_safe_private_reply(context, settings):

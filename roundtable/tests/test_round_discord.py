@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 import json
@@ -95,8 +95,14 @@ async def test_decide_defers_and_snapshots_all_visible_nonbot_members(context):
     assert {member.user_id for member in ctx.db.round_members(1)} == {"102", "103", "104"}
     ctx.guild.chunk.assert_awaited_once_with(cache=True)
     sent = ctx.channel.send.call_args
-    assert sent.args[0].startswith("Roundtable (AI): Starting a private round")
-    assert sent.kwargs["embed"].footer.text == "0 of 3 have shared a view"
+    assert sent.args[0] == "Roundtable (AI): New private round."
+    card = sent.kwargs["embed"]
+    assert card.description.startswith("**Which market: Campus or Local businesses?**")
+    assert card.footer.text == "0 of 3 have shared a view"
+    deadline = int(datetime.fromisoformat(record.deadline_at).timestamp())
+    assert [(field.name, field.value) for field in card.fields] == [
+        ("Closes", f"<t:{deadline}:R> \u00b7 <t:{deadline}:f>"), ("Views", "\u26aa" * 3),
+    ]
     assert sent.kwargs["view"].is_persistent()
     assert interaction.followup.send.call_args.kwargs["ephemeral"]
     assert record.public_message_id == str(ctx.channel.send.return_value.id)
@@ -147,6 +153,7 @@ async def test_modal_saves_only_complete_submission_and_progress_counts(context)
     assert row.reason == "Private one-liner not yet public." and not row.show_name
     edit = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
     assert set(edit) == {"embed"} and edit["embed"].footer.text == "1 of 3 have shared a view"
+    assert edit["embed"].fields[1].value == "\U0001f7e2" + "\u26aa" * 2
     assert row.reason not in json.dumps(edit["embed"].to_dict())
     ctx.channel.send.assert_not_awaited()
     assert ctx.db.get_round(record.id).status == "collecting"
@@ -171,12 +178,17 @@ async def test_all_replies_close_once_with_full_result_and_outcomes(context):
     edit = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
     assert edit["content"].startswith("Roundtable (AI):")
     embed = edit["embed"]
-    assert "2 lean toward Campus" in embed.description and "1 leans toward Local businesses" in embed.description
-    assert [field.name.split(" · ")[0] for field in embed.fields[:3]] == ["Anonymous", "Ben", "Anonymous"]
+    assert embed.description.startswith("**Which market: Campus or Local businesses?**\n\n")
+    assert "**2** \u00b7 Campus" in embed.description and "**1** \u00b7 Local businesses" in embed.description
+    assert embed.colour == formatting.CLOSED_COLOUR
+    assert [field.name for field in embed.fields] == ["Summary", "Key trade-off", "Next question", "What members said", "\u200b"]
+    assert embed.fields[3].value == "**Campus**\n> Campus access is easier.\n> Campus contacts are available. \u2014 Ben"
+    assert embed.fields[4].value == "**Local businesses**\n> Local contacts are available."
+    assert "Anonymous" not in json.dumps(embed.to_dict())
     assert "Ana" not in json.dumps(embed.to_dict()) and "Chen" not in json.dumps(embed.to_dict())
-    assert {field.name for field in embed.fields[-3:]} == {"Minority case", "Key trade-off", "Next question"}
-    assert "Local contacts" in embed.fields[-3].value
-    assert embed.footer.text == "The call is yours. Pick the outcome to log it."
+    assert edit["content"] == "Roundtable (AI): Round closed."
+    assert "Local contacts" in embed.fields[0].value
+    assert embed.footer.text == "The call is yours. Pick the team's decision below to log it."
     assert isinstance(edit["view"], OutcomeView) and edit["view"].is_persistent()
     assert [button.label for button in edit["view"].children] == ["Campus", "Local businesses", "None of these"]
     assert all(not button.disabled for button in edit["view"].children)
@@ -227,6 +239,9 @@ async def test_outcome_is_atomic_disables_buttons_and_log_is_private(context):
     assert saved.outcome_at is not None
     buttons = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["view"].children
     assert all(button.disabled for button in buttons)
+    assert [button.style for button in buttons] == [
+        discord.ButtonStyle.secondary, discord.ButtonStyle.success, discord.ButtonStyle.secondary,
+    ]
     assert ctx.channel.send.call_args.args[0].startswith("Roundtable (AI): Outcome logged:")
     assert not ctx.channel.send.call_args.kwargs["view"].children[0].item.disabled
     posts = ctx.channel.send.await_count
@@ -334,7 +349,7 @@ async def test_pause_during_synthesis_stays_silent_and_recovers_after_resume(con
     ctx.service.provider.complete = original
     await ctx.scheduler.tick(now=T0)
     assert record.id not in ctx.ui.pending_results
-    assert "Round on" in ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["content"]
+    assert "Round closed." in ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["content"]
 
 
 async def test_restart_restores_public_views_private_controls_and_modal(context, settings):
@@ -415,9 +430,13 @@ async def test_restart_reconciles_disabled_outcome_buttons_without_new_posts(con
     try:
         assert record.id in restarted.rounds_ui.pending_outcome_views
         ctx.channel.send.reset_mock()
+        card = discord.Embed(colour=formatting.CLOSED_COLOUR, description="**Which market?**")
+        ctx.channel.fetch_message = AsyncMock(return_value=SimpleNamespace(embeds=[card]))
         await restarted.scheduler.tick(now=T0 + timedelta(minutes=1))
         assert record.id not in restarted.rounds_ui.pending_outcome_views
-        assert all(button.disabled for button in ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["view"].children)
+        edit = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
+        assert all(button.disabled for button in edit["view"].children)
+        assert edit["embed"].colour == formatting.DECIDED_COLOUR and edit["embed"].footer.text.startswith("\u2705 Decided: Campus")
         assert restored_db.get_round(record.id).outcome_at == saved_at
         ctx.channel.send.assert_not_awaited()
     finally:
@@ -450,9 +469,9 @@ async def test_result_keeps_english_and_original_and_fits_five_long_reasons(cont
         )
     prepared = await ctx.service.prepare_result(record.id, T0)
     long_result = replace(
-        prepared, minority_option="Campus",
+        prepared,
         reasons=tuple(PresentedReason(item.response, "English " * 75) for item in prepared.reasons),
-        synthesis=Synthesis(steelman="S" * 700, trade_off="T" * 300, question="Q" * 300),
+        synthesis=Synthesis(summary="S" * 700, trade_off="T" * 300, question="Q" * 300),
     )
     payload = formatting.result_message(long_result, {})
     embed = payload["embed"]
@@ -462,6 +481,9 @@ async def test_result_keeps_english_and_original_and_fits_five_long_reasons(cont
     assert "(" + "原" * 300 + ")" in str(embed.to_dict())
     assert "Key trade-off" in str(embed.to_dict()) + payload["content"]
     assert "Next question" in str(embed.to_dict()) + payload["content"]
+    said = "".join(field.value for field in embed.fields if field.name in {"What members said", "\u200b"})
+    assert said.count("> English ") == 5 and said.count("原" * 300) == 5  # Chunking drops nothing.
+    assert "**Summary**\n" + "S" * 700 in payload["content"] + "".join(f"**{f.name}**\n{f.value}" for f in embed.fields)
 
 
 async def test_startup_cancels_orphan_without_a_public_message(context):
@@ -478,3 +500,59 @@ def test_public_text_escapes_mentions_markdown_and_links():
     value = formatting.safe("@everyone **text** [document](https://example.org/file) <@123456789012345678>")
     assert "@everyone" not in value and "<@123456789012345678>" not in value
     assert "\\*\\*text\\*\\*" in value and "\\[document\\]" in value
+
+
+async def test_decide_uses_chosen_deadline_and_rejects_bad_ones_before_model(context):
+    ctx = context
+    ctx.service.provider.complete = AsyncMock(wraps=ctx.service.provider.complete)
+    await ctx.ui.decide(ctx.make(), "Which market: Campus or Local businesses?", "36h")
+    record = ctx.db.get_round(1)
+    span = datetime.fromisoformat(record.deadline_at) - datetime.fromisoformat(record.created_at)
+    assert span == timedelta(hours=36)
+    calls = ctx.service.provider.complete.await_count
+    for bad in ["soon", "2 fortnights", "1m", "31d"]:
+        interaction = ctx.make()
+        await ctx.ui.decide(interaction, "Which market: Campus or Local businesses?", bad)
+        assert interaction.followup.send.call_args.args[0].startswith("Use a round length like 1h")
+    assert ctx.service.provider.complete.await_count == calls
+    assert ctx.db.get_round(2) is None
+
+
+async def test_deadline_autocomplete_offers_presets_and_valid_typed_lengths(context):
+    ctx = context
+
+    async def shown(text):
+        return [(choice.name, choice.value) for choice in await ctx.ui.deadline_choices(ctx.make(), text)]
+
+    presets = [("1 hour", "1h"), ("6 hours", "6h"), ("1 day", "1d"), ("3 days", "3d"), ("1 week", "1w")]
+    assert await shown("") == presets and await shown("nonsense") == presets
+    assert await shown("day") == [("1 day", "1d"), ("3 days", "3d")]
+    # A bare number offers each unit that stays within 5 minutes to 30 days.
+    assert await shown("5") == [("5 hours", "5h"), ("5 days", "5d"), ("5 minutes", "5m")]
+    assert await shown("1") == [("1 hour", "1h"), ("1 day", "1d"), ("1 week", "1w")]
+    assert await shown("5 da") == [("5 days", "5d")] and await shown("36h") == [("36 hours", "36h")]
+    assert await shown("3 hrs") == [("3 hours", "3h")] and await shown("10 min") == [("10 minutes", "10m")]
+    assert await shown("31d") == [] and await shown("5x") == []
+
+
+@pytest.mark.parametrize("replied, total, expected", [
+    (0, 2, "⚪⚪"), (2, 2, "\U0001f7e2\U0001f7e2"), (3, 10, "\U0001f7e2" * 3 + "⚪" * 7),
+    (1, 40, "▰" + "▱" * 9), (39, 40, "▰" * 9 + "▱"), (40, 40, "▰" * 10), (0, 40, "▱" * 10),
+])
+def test_progress_dots_fill_by_count_and_switch_to_bar_for_large_teams(replied, total, expected):
+    assert formatting.progress_dots(replied, total) == expected
+
+
+async def test_logged_outcome_turns_existing_card_green_without_new_synthesis(context):
+    ctx, record = context, context.begin(members=("102",))
+    await submit(ctx, record)
+    card = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["embed"]
+    ctx.service.provider.complete = AsyncMock()
+    outcome = ctx.make()
+    outcome.message.embeds = [card]
+    await ctx.ui.log_outcome(outcome, record.id, 0)
+    decided = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["embed"]
+    assert decided.colour == formatting.DECIDED_COLOUR and card.colour == formatting.CLOSED_COLOUR
+    assert decided.footer.text == "\u2705 Decided: Campus \u00b7 Saved to /rt-log"
+    assert decided.description == card.description and len(decided.fields) == len(card.fields)
+    ctx.service.provider.complete.assert_not_awaited()

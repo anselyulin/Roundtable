@@ -7,13 +7,13 @@ from discord import app_commands
 
 from bot import formatting
 from bot.formatting import (
-    GENERIC_ERROR, HELP_TEXT, PAUSED_NOTICE, RESUMED_NOTICE,
+    GENERIC_ERROR, HELP_TEXT, NOT_PAUSED, PAUSED_NOTICE, RESUMED_NOTICE,
     SETUP_REQUIRED, TRANSPARENCY_NOTICE,
 )
 from core.db import Database
 from core.clarify import ClarifyService
 from core.detection import DetectionService
-from core.rounds import RoundError, RoundService, now_utc
+from core.rounds import RoundError, RoundService, duration_suggestions, now_utc, parse_duration
 from core.tasks import TaskService, proposal_fingerprint
 from core.timeline import TimelineService
 
@@ -115,10 +115,22 @@ class ChannelCommands:
         if not await self._begin(interaction):
             return
         async with self._lock(interaction):
-            if not self.db.set_paused(interaction.channel.id, False):
+            channel = interaction.channel
+            state = self.db.get_channel(channel.id)
+            was_paused = bool(state and state.paused)
+            if not self.db.set_paused(channel.id, False):
                 await self._reply(interaction, SETUP_REQUIRED)
                 return
-            await self._reply(interaction, RESUMED_NOTICE)
+            if not was_paused:
+                await self._reply(interaction, NOT_PAUSED)
+                return
+            # Announce publicly, like pause, so nobody believes the bot is still
+            # silent. A normal channel post keeps the caller anonymous.
+            try:
+                await channel.send(RESUMED_NOTICE, allowed_mentions=discord.AllowedMentions.none())
+                await interaction.delete_original_response()
+            except discord.HTTPException:
+                await self._reply(interaction, RESUMED_NOTICE)
 
     async def help(self, interaction: discord.Interaction) -> None:
         if not await self._begin(interaction):
@@ -187,6 +199,7 @@ ERROR_TEXT = {
     "task_proposal": "These owner suggestions expired or were already handled. Use /rt-tasks assign for unowned tasks.",
     "task_private": "These private controls belong to the member and channel that opened them.",
     "task_input": "Enter your own task title (up to 200 characters) or preference note (up to 300 characters).",
+    "round_deadline": "Use a round length like 1h, 36h, 2d, or 1w, between 5 minutes and 30 days.",
     "deadline": "Add an upcoming assignment deadline with /rt-deadline add first.",
     "deadline_soon": "That deadline is too close for a timeline with a one-day buffer. Please plan the remaining work together.",
     "timeline_preview": "This private preview expired or was already posted. Run /rt-timeline for a fresh proposal.",
@@ -245,27 +258,42 @@ class RoundController:
             and (thread_ids is None or member.id in thread_ids or channel.permissions_for(member).manage_threads)
         )
 
-    async def decide(self, interaction: discord.Interaction, question: app_commands.Range[str, 1, 300]):
+    @app_commands.describe(
+        question="The decision to make, e.g. Which market: Campus or Local businesses?",
+        deadline="How long the round stays open, e.g. 1h, 36h, 2d, 1w. Default: the server setting.",
+    )
+    async def decide(
+        self, interaction: discord.Interaction, question: app_commands.Range[str, 1, 300],
+        deadline: app_commands.Range[str, 1, 20] | None = None,
+    ):
         if not await self.controls._begin(interaction):
             return
         try:
+            # Validate before any model call so a typo costs nothing.
+            deadline_hours = parse_duration(deadline) if deadline else None
             prepared = await self.service.prepare_question(interaction.channel.id, question)
             self.service.require_active(interaction.channel.id)
             member_ids = await self.visible_members(interaction.channel, interaction.guild)
             async with self.controls._lock(interaction):
-                record = self.service.start(interaction.channel.id, interaction.user.id, prepared, member_ids, now_utc())
+                record = self.service.start(
+                    interaction.channel.id, interaction.user.id, prepared, member_ids, now_utc(),
+                    deadline_hours=deadline_hours,
+                )
                 if not await self.post_round(interaction, record, len(set(member_ids))):
                     return
                 await self.controls._reply(interaction, "Round started. Use Share my view in the channel; your submission is private until close.")
         except RoundError as error:
             await self.fail(interaction, error)
 
+    async def deadline_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        return [app_commands.Choice(name=label, value=value) for label, value in duration_suggestions(current)]
+
     async def post_round(self, interaction, record, total: int) -> bool:
         # Caller holds the channel pause lock for both ordinary and reopened rounds.
         from bot.views import ShareView
         try:
             message = await interaction.channel.send(
-                formatting.starting_text(record), embed=formatting.progress_embed(0, total),
+                formatting.starting_text(record), embed=formatting.round_card(record, 0, total),
                 view=ShareView(self, record.id), allowed_mentions=discord.AllowedMentions.none(),
             )
             self.db.set_round_message(record.id, message.id)
@@ -307,6 +335,7 @@ class RoundController:
                 try:
                     await channel.get_partial_message(int(record.public_message_id)).edit(
                         content=formatting.starting_text(record), view=ShareView(self, round_id),
+                        embed=formatting.round_card(record, *self.service.progress(round_id)),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except discord.NotFound:
@@ -512,7 +541,7 @@ class RoundController:
                 if current.status == "collecting":
                     try:
                         await interaction.channel.get_partial_message(int(current.public_message_id)).edit(
-                            embed=formatting.progress_embed(*self.service.progress(round_id))
+                            embed=formatting.round_card(current, *self.service.progress(round_id))
                         )
                     except discord.HTTPException:
                         pass
@@ -587,7 +616,8 @@ class RoundController:
                 self.pending_outcome_views.add(round_id)
                 try:
                     await interaction.channel.get_partial_message(int(record.public_message_id)).edit(
-                        view=OutcomeView(self, record, self.service.choices(record))
+                        view=OutcomeView(self, record, self.service.choices(record)),
+                        **self.decided_card(interaction.message, record),
                     )
                     self.pending_outcome_views.discard(round_id)
                 except discord.HTTPException:
@@ -600,6 +630,14 @@ class RoundController:
         except RoundError as error:
             await self.fail(interaction, error)
 
+    @staticmethod
+    def decided_card(message, record) -> dict:
+        # Recolour the existing result card rather than regenerating synthesis.
+        embeds = getattr(message, "embeds", None)
+        if not isinstance(embeds, list) or not embeds or not isinstance(embeds[0], discord.Embed):
+            return {}
+        return {"embed": formatting.decided_embed(embeds[0], record.outcome)}
+
     async def reconcile_outcome_view(self, round_id):
         record = self.db.get_round(round_id)
         if record is None or record.outcome is None:
@@ -610,8 +648,10 @@ class RoundController:
             self.service.require_active(record.channel_id)
             from bot.views import OutcomeView
             try:
+                message = await channel.fetch_message(int(record.public_message_id))
                 await channel.get_partial_message(int(record.public_message_id)).edit(
-                    view=OutcomeView(self, record, self.service.choices(record))
+                    view=OutcomeView(self, record, self.service.choices(record)),
+                    **self.decided_card(message, record),
                 )
             except discord.NotFound:
                 # A deleted, already-logged result remains accessible in /rt-log.
@@ -638,6 +678,8 @@ def register_round_commands(tree, controller: RoundController):
     ):
         command = app_commands.Command(name=name, description=description, callback=callback)
         command.guild_only = True
+        if name == "rt-decide":
+            command.autocomplete("deadline")(controller.deadline_choices)
         tree.add_command(command)
 
 
@@ -874,11 +916,21 @@ class TaskController:
         try:
             async with self.controls._lock(interaction):
                 task = self.service.add(interaction.channel.id, interaction.user.id, title, due, now_utc())
-                await self.controls._reply(interaction, f"Task {task.id} added, unowned. Use /rt-tasks assign for suggestions; owners need confirmation.")
+                await self.announce_task(interaction, task)
         except RoundError as error:
             await self.fail(interaction, error)
         except Exception:
             await self.fail(interaction)
+
+    async def announce_task(self, interaction, task, decision: str | None = None):
+        # Tasks are team work, so the channel sees them. A normal post keeps the
+        # adder unnamed, like pause; the private reply is only a fallback.
+        text = formatting.task_added(task, decision)
+        try:
+            await interaction.channel.send(text, allowed_mentions=discord.AllowedMentions.none())
+            await interaction.delete_original_response()
+        except discord.HTTPException:
+            await self.controls._reply(interaction, text)
 
     async def prefs(self, interaction: discord.Interaction, note: app_commands.Range[str, 1, 300]):
         if not await self.controls._begin(interaction):
@@ -1047,7 +1099,7 @@ class TaskController:
                 if len(fields) != 2 or set(values) != {"rt:task_title", "rt:task_due"} or any(not isinstance(value, str) for value in values.values()):
                     raise RoundError("task_input")
                 task = self.service.add(channel_id, user_id, values["rt:task_title"], values["rt:task_due"] or None, now_utc(), round_id=round_id)
-                await self.controls._reply(interaction, f"Task {task.id} added for this decision, unowned. Use /rt-tasks assign for suggestions.")
+                await self.announce_task(interaction, task, self.client.rounds.get(round_id, channel_id).outcome)
         except RoundError as error:
             await self.fail(interaction, error)
         except Exception:
