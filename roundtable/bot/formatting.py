@@ -48,7 +48,7 @@ HELP_TEXT = (
     "/rt-pause — any member can pause this channel.\n"
     "/rt-resume — any member can resume this channel.\n"
     "/rt-help — show this private help.\n"
-    "/rt-decide question:<text> — start a private-first decision round.\n"
+    "/rt-decide question:<text> deadline:<optional duration> — start a private-first decision round (e.g. 36h or 2d).\n"
     "/rt-log — show the last 10 closed decisions privately.\n"
     "/re-open — browse past decisions, add an option or vote again.\n\n"
     "Right-click a message → Apps → Ask Roundtable privately for a private explanation. "
@@ -202,7 +202,7 @@ def clarification_embed(result: Clarification) -> discord.Embed:
 
 def detection_prompt(prompt: DecisionPrompt, record: RoundRecord | None = None) -> str:
     if prompt.status == "dismissed":
-        return "Roundtable (AI): Okay, I'll stay quiet."
+        return "Roundtable (AI): Okay, I won't start this round."
     if prompt.status == "accepted":
         if record is not None and record.status == "cancelled":
             return "Roundtable (AI): The round could not be posted. Use /rt-decide to try again."

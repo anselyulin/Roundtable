@@ -13,7 +13,7 @@ from bot.formatting import (
 from core.db import Database
 from core.clarify import ClarifyService
 from core.detection import DetectionService
-from core.rounds import RoundError, RoundService, now_utc
+from core.rounds import RoundError, RoundService, duration_suggestions, now_utc, parse_duration
 from core.tasks import TaskService, proposal_fingerprint
 from core.timeline import TimelineService
 
@@ -187,6 +187,7 @@ ERROR_TEXT = {
     "task_proposal": "These owner suggestions expired or were already handled. Use /rt-tasks assign for unowned tasks.",
     "task_private": "These private controls belong to the member and channel that opened them.",
     "task_input": "Enter your own task title (up to 200 characters) or preference note (up to 300 characters).",
+    "round_deadline": "Use a round length like 1h, 36h, 2d, or 1w, between 5 minutes and 30 days.",
     "deadline": "Add an upcoming assignment deadline with /rt-deadline add first.",
     "deadline_soon": "That deadline is too close for a timeline with a one-day buffer. Please plan the remaining work together.",
     "timeline_preview": "This private preview expired or was already posted. Run /rt-timeline for a fresh proposal.",
@@ -245,20 +246,35 @@ class RoundController:
             and (thread_ids is None or member.id in thread_ids or channel.permissions_for(member).manage_threads)
         )
 
-    async def decide(self, interaction: discord.Interaction, question: app_commands.Range[str, 1, 300]):
+    @app_commands.describe(
+        question="The decision to make, e.g. Which market: Campus or Local businesses?",
+        deadline="How long the round stays open, e.g. 1h, 36h, 2d, 1w. Default: the server setting.",
+    )
+    async def decide(
+        self, interaction: discord.Interaction, question: app_commands.Range[str, 1, 300],
+        deadline: app_commands.Range[str, 1, 20] | None = None,
+    ):
         if not await self.controls._begin(interaction):
             return
         try:
+            # Validate before any model call so a typo costs nothing.
+            deadline_hours = parse_duration(deadline) if deadline is not None else None
             prepared = await self.service.prepare_question(interaction.channel.id, question)
             self.service.require_active(interaction.channel.id)
             member_ids = await self.visible_members(interaction.channel, interaction.guild)
             async with self.controls._lock(interaction):
-                record = self.service.start(interaction.channel.id, interaction.user.id, prepared, member_ids, now_utc())
+                record = self.service.start(
+                    interaction.channel.id, interaction.user.id, prepared, member_ids, now_utc(),
+                    deadline_hours=deadline_hours,
+                )
                 if not await self.post_round(interaction, record, len(set(member_ids))):
                     return
                 await self.controls._reply(interaction, "Round started. Use Share my view in the channel; your submission is private until close.")
         except RoundError as error:
             await self.fail(interaction, error)
+
+    async def deadline_choices(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        return [app_commands.Choice(name=label, value=value) for label, value in duration_suggestions(current)]
 
     async def post_round(self, interaction, record, total: int) -> bool:
         # Caller holds the channel pause lock for both ordinary and reopened rounds.
@@ -638,6 +654,8 @@ def register_round_commands(tree, controller: RoundController):
     ):
         command = app_commands.Command(name=name, description=description, callback=callback)
         command.guild_only = True
+        if name == "rt-decide":
+            command.autocomplete("deadline")(controller.deadline_choices)
         tree.add_command(command)
 
 
@@ -807,7 +825,7 @@ class DetectionController:
                     self.service.dismiss(prompt_id, interaction.channel.id)
                     self.pending_edits.add(prompt_id)
                     await self.edit_prompt(interaction.channel, prompt_id)
-                    await self.controls._reply(interaction, "Okay, I'll stay quiet for at least 60 minutes.")
+                    await self.controls._reply(interaction, "Okay, I won't start this round.")
             self.schedule_expiry()
         except RoundError as error:
             await self.client.rounds_ui.fail(interaction, error)

@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 import json
@@ -69,6 +69,65 @@ async def submit(context, record, user_id=102, reason="Campus access is easier."
     interaction = context.make(user_id, modal_data(reason))
     await context.ui.submit_modal(interaction, record.id, user_id, selection, named)
     return interaction
+
+
+async def test_decide_uses_chosen_deadline_and_rejects_bad_ones_before_model(context):
+    ctx = context
+    ctx.service.provider.complete = AsyncMock(wraps=ctx.service.provider.complete)
+    await ctx.ui.decide(ctx.make(), "Which market: Campus or Local businesses?", "36h")
+    record = ctx.db.get_round(1)
+    deadline = datetime.fromisoformat(record.deadline_at)
+    assert deadline - datetime.fromisoformat(record.created_at) == timedelta(hours=36)
+    assert f"<t:{int(deadline.timestamp())}:F>" in ctx.channel.send.call_args.args[0]
+    calls = ctx.service.provider.complete.await_count
+    posts = ctx.channel.send.await_count
+    for bad in ["", "soon", "2 fortnights", "1m", "31d"]:
+        interaction = ctx.make()
+        await ctx.ui.decide(interaction, "Which market: Campus or Local businesses?", bad)
+        assert interaction.followup.send.call_args.args[0].startswith("Use a round length like 1h")
+        assert interaction.followup.send.call_args.kwargs["ephemeral"]
+    assert ctx.service.provider.complete.await_count == calls
+    assert ctx.channel.send.await_count == posts
+    assert ctx.db.get_round(2) is None
+
+
+async def test_deadline_autocomplete_offers_presets_and_valid_typed_lengths(context):
+    ctx = context
+
+    async def shown(text):
+        return [(choice.name, choice.value) for choice in await ctx.ui.deadline_choices(ctx.make(), text)]
+
+    presets = [("1 hour", "1h"), ("6 hours", "6h"), ("1 day", "1d"), ("3 days", "3d"), ("1 week", "1w")]
+    assert await shown("") == presets and await shown("nonsense") == presets
+    assert await shown("day") == [("1 day", "1d"), ("3 days", "3d")]
+    assert await shown("5") == [("5 hours", "5h"), ("5 days", "5d"), ("5 minutes", "5m")]
+    assert await shown("1") == [("1 hour", "1h"), ("1 day", "1d"), ("1 week", "1w")]
+    assert await shown("5 da") == [("5 days", "5d")]
+    assert await shown("36h") == [("36 hours", "36h")]
+    assert await shown("3 hrs") == [("3 hours", "3h")]
+    assert await shown("10 min") == [("10 minutes", "10m")]
+    assert await shown("31d") == [] and await shown("5x") == []
+    parameters = {parameter.name: parameter for parameter in ctx.client.tree.get_command("rt-decide").parameters}
+    assert parameters["question"].required
+    assert not parameters["deadline"].required and parameters["deadline"].autocomplete
+
+
+async def test_chosen_deadline_drives_halfway_reminders_and_scheduled_close(context):
+    ctx = context
+    await ctx.ui.decide(ctx.make(), "Which market: Campus or Local businesses?", "2h")
+    record = ctx.db.get_round(1)
+    await submit(ctx, record)
+    await ctx.scheduler.tick(now=T0 + timedelta(minutes=59))
+    assert all(member.send.await_count == 0 for member in ctx.members)
+    await ctx.scheduler.tick(now=T0 + timedelta(hours=1))
+    assert [member.send.await_count for member in ctx.members] == [0, 1, 1]
+    await ctx.scheduler.tick(now=T0 + timedelta(hours=2))
+    assert ctx.db.get_round(record.id).status == "closed"
+    payload = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
+    assert "Proceeding with 1 of 3 views." in payload["content"]
+    late = await submit(ctx, record, 103)
+    assert "closed" in late.followup.send.call_args.args[0].lower()
+    assert ctx.service.progress(record.id) == (1, 3)
 
 
 async def test_decide_defers_and_snapshots_all_visible_nonbot_members(context):

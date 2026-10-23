@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -170,18 +171,45 @@ async def test_shown_accepted_counters_and_new_round_are_exactly_once(detector):
     assert ctx.service.can_offer(200, T0 + timedelta(minutes=15))
 
 
-async def test_dismiss_cooldown_and_counters_survive_restart(detector, settings):
+async def test_dismiss_keeps_only_normal_cooldown_and_counters_survive_restart(detector, settings):
     ctx = detector
     prompt = await shown(ctx)
     ctx.service.dismiss(prompt.id, 200)
     assert metric(ctx, "prompts_dismissed") == 1
     assert not ctx.db.connection.execute("SELECT 1 FROM rounds").fetchone()
     restarted = DetectionService(ctx.db, FakeProvider(), settings)
-    assert not restarted.can_offer(200, T0 + timedelta(minutes=59, seconds=59))
-    assert restarted.can_offer(200, T0 + timedelta(minutes=60))
+    assert not restarted.can_offer(200, T0 + timedelta(minutes=14, seconds=59))
+    assert restarted.can_offer(200, T0 + timedelta(minutes=15))
     with pytest.raises(RoundError):
         restarted.accept(prompt.id, 200, 102, ("102",))
     assert metric(ctx, "prompts_dismissed") == 1 and not metric(ctx, "prompts_accepted")
+
+
+async def test_late_dismissal_does_not_restart_normal_cooldown(detector):
+    ctx = detector
+    prompt = await shown(ctx)
+    ctx.now[0] = T0 + timedelta(minutes=20)
+    ctx.service.dismiss(prompt.id, 200)
+    assert ctx.service.can_offer(200, ctx.now[0])
+    with pytest.raises(RoundError):
+        ctx.service.dismiss(prompt.id, 200)
+    assert metric(ctx, "prompts_dismissed") == 1
+    assert not ctx.db.connection.execute("SELECT 1 FROM rounds").fetchone()
+    assert await ctx.service.evaluate(feed(ctx)) is not None
+
+
+@pytest.mark.parametrize("minutes", [5, 15, 90])
+async def test_legacy_dismissal_timer_does_not_override_configured_cooldown(detector, settings, minutes):
+    ctx = detector
+    prompt = await shown(ctx)
+    ctx.service.dismiss(prompt.id, 200)
+    ctx.db.connection.execute(
+        "UPDATE channels SET detection_cooldown_until=? WHERE channel_id='200'",
+        ((T0 + timedelta(minutes=60)).isoformat(),),
+    )
+    restarted = DetectionService(ctx.db, FakeProvider(), replace(settings, detection_cooldown_min=minutes))
+    assert not restarted.can_offer(200, T0 + timedelta(minutes=minutes) - timedelta(seconds=1))
+    assert restarted.can_offer(200, T0 + timedelta(minutes=minutes))
 
 
 async def test_in_flight_check_cannot_publish_after_pause_resume_or_expiry(detector):

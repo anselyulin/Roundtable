@@ -143,18 +143,21 @@ async def test_yes_uses_detected_options_and_current_members_without_extraction(
     assert all(button.disabled for button in ctx.channel.get_partial_message.return_value.edit.call_args.kwargs["view"].children)
 
 
-async def test_no_disables_prompt_and_extends_cooldown_to_sixty_minutes(automatic):
+async def test_no_disables_prompt_without_extending_normal_cooldown(automatic):
     ctx = automatic
     prompt = await show(ctx)
     view = ctx.channel.send.call_args.kwargs["view"]
-    await view.children[1].callback(ctx.make())
+    interaction = ctx.make()
+    await view.children[1].callback(interaction)
     edit = ctx.channel.get_partial_message.return_value.edit.call_args.kwargs
-    assert edit["content"] == "Roundtable (AI): Okay, I'll stay quiet."
+    assert edit["content"] == "Roundtable (AI): Okay, I won't start this round."
+    assert interaction.followup.send.call_args.args[0] == "Okay, I won't start this round."
+    assert interaction.followup.send.call_args.kwargs["ephemeral"]
     assert all(button.disabled for button in edit["view"].children)
     assert metric(ctx, "prompts_dismissed") == 1 and not metric(ctx, "prompts_accepted")
-    assert ctx.db.get_channel(200).detection_cooldown_until == (T0 + timedelta(minutes=60)).isoformat()
+    assert ctx.db.get_channel(200).detection_cooldown_until == (T0 + timedelta(minutes=15)).isoformat()
     assert not ctx.db.connection.execute("SELECT 1 FROM rounds").fetchone()
-    ctx.now[0] = T0 + timedelta(minutes=59)
+    ctx.now[0] = T0 + timedelta(minutes=14)
     for index, text in enumerate(TEXTS):
         await ctx.client.on_message(message(ctx, text, 102 + index % 2))
     assert ctx.channel.send.await_count == 1 and ctx.client.detection.provider.complete.await_count == 1

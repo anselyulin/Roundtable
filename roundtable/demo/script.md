@@ -165,8 +165,9 @@ plus **Ended early.** These branches do not need an LLM or a 24-hour wait.
 
 ## Troubleshooting and a reliable fallback
 
-- **Worked once, then stopped:** offers have a 15-minute cooldown. No thanks
-  extends it to at least 60 minutes. An unanswered old offer also blocks another.
+- **Worked once, then stopped:** offers have a configured cooldown (15 minutes
+  by default). No thanks dismisses only that offer, without adding quiet time.
+  An unanswered old offer also blocks another.
   Pause/resume and a restart do not reset these states. Use a fresh enabled
   channel for a new take, or wait and send new messages. Do not delete history.
 - **Paused:** run `/rt-resume`; its confirmation is private. Chat sent while

@@ -82,8 +82,8 @@ class DetectionService:
         if not self.can_read(channel_id) or self.db.has_pending_prompt(channel_id):
             return False
         state = self.db.get_channel(channel_id)
-        if state.detection_cooldown_until and now < datetime.fromisoformat(state.detection_cooldown_until):
-            return False
+        # The normal posting cooldown is authoritative. Ignore legacy extended
+        # dismissal timers so upgrading also releases old 60-minute quiet periods.
         return not state.last_prompt_at or now >= datetime.fromisoformat(state.last_prompt_at) + self.cooldown
 
     def expire(self, now: datetime | None = None) -> None:
@@ -203,7 +203,7 @@ class DetectionService:
     def dismiss(self, prompt_id: int, channel_id: str | int) -> None:
         self.pending_prompt(prompt_id, channel_id)
         now = self.clock()
-        if not self.db.dismiss_decision_prompt(prompt_id, utc_iso(now), utc_iso(now + timedelta(minutes=60))):
+        if not self.db.dismiss_decision_prompt(prompt_id, utc_iso(now)):
             raise RoundError("detection_prompt")
         self.clear_channel(channel_id)
 

@@ -174,7 +174,7 @@ an hour to appear. Restart after changing the sync target.
 | `/rt-pause` | Any channel member can pause; posts the exact anonymous one-line confirmation. |
 | `/rt-resume` | Any channel member can resume; confirms privately. |
 | `/rt-help` | Private command list, beginning with the required pitch line. |
-| `/rt-decide question:<text>` | Start a private-first decision round for all visible non-bot channel members. |
+| `/rt-decide question:<text> deadline:<optional duration>` | Start a private-first decision round for all visible non-bot channel members; optionally choose its duration, e.g. `36h` or `2d`. |
 | `/rt-log` | Private list of the channel's last 10 closed decisions: question, outcome or “open outcome”, owner, date. |
 | `/re-open` | Browse the channel's previous decisions privately; reopen one with the same options or add a new option. |
 | **Ask Roundtable privately** (message context menu) | Explain only the selected message, privately; optionally rate the answer Helpful / Not helpful. |
@@ -196,6 +196,20 @@ replaces it. If pinning fails, fix permissions and retry; the saved notice is
 reused. Setup never silently resumes a paused channel.
 
 ## Decision rounds
+
+To choose a duration for a command-started round, use the optional **deadline**
+field, for example `/rt-decide question:Which market: Campus or Local businesses? deadline:36h`.
+Autocomplete offers presets and suggestions as you type. Accepted units are
+minutes (`m`), hours (`h`), days (`d`), and weeks (`w`), including full unit names
+and decimal amounts such as `1.5h`. Custom durations must be between **5 minutes
+and 30 days**. This is a duration from round creation, rather than a calendar date.
+Invalid durations are rejected privately before any model call or round creation.
+
+Leaving **deadline** blank preserves `ROUND_DEADLINE_HOURS` (24 hours by default,
+or the existing three-minute demo setting). Auto-detected and reopened rounds
+continue to use that configured default. A custom duration controls the displayed
+deadline, halfway reminder, and scheduled closure, and survives bot restarts.
+Rounds can still close when everyone replies or an authorized member ends them early.
 
 1. Run `/rt-decide question:Which market: Campus or Local businesses?`.
    Questions are limited to 300 characters. The public message contains only the
@@ -278,8 +292,9 @@ stay silent.
 The AI-labeled offer has **Yes, run a round** and **No thanks** buttons. Yes
 starts the existing private share/reason flow using the proposed choices and
 current visible members; no round starts before consent. No changes the offer to
-**Roundtable (AI): Okay, I'll stay quiet.** and extends the quiet period to at
-least 60 minutes from dismissal. Anyone currently authorized in that channel
+**Roundtable (AI): Okay, I won't start this round.** without starting a round or
+adding any extra cooldown. The normal `DETECTION_COOLDOWN_MIN` still runs from
+when the offer was posted; No does not restart it. Anyone currently authorized in that channel
 can answer; the first valid click wins. Pause blocks both actions and immediately
 clears the chat window.
 
@@ -454,7 +469,9 @@ from `roundtable/`. All eight specified tables exist, including aggregate-only
 nullable `rounds.reopened_from` foreign key and an index that prevents duplicate
 active reopenings of one decision. Existing databases upgrade automatically,
 preserving historical rows. Step 4 adds `decision_prompts` for proposed structured
-decisions and `channels.detection_cooldown_until` for restart-safe quiet periods.
+decisions and `channels.detection_cooldown_until` (retained for compatibility).
+The configured offer cooldown is enforced from `channels.last_prompt_at` across
+restarts. Old 60-minute dismissal timers no longer block detection.
 Step 5 adds nullable `tasks.proposal_batch` and `tasks.proposal_message_id` for
 restart-safe proposal controls. Model explanations are never stored; only
 member-authored titles, proposed owners, timestamps, and control metadata persist.
@@ -578,7 +595,7 @@ rounds normally use `ROUND_DEADLINE_HOURS=24`.
 
 | Symptom | Check/action |
 | --- | --- |
-| Detection worked once, then stopped | The 15-minute offer cooldown survives resume/restart. No thanks extends it to at least 60 minutes; an unanswered offer also blocks new ones. Use a fresh enabled test channel or wait and send new messages. Keep decision history. |
+| Detection worked once, then stopped | The configured offer cooldown (default 15 minutes) survives resume/restart. No thanks only dismisses that offer, without extra quiet time; an unanswered offer blocks new ones. Use a fresh enabled test channel or wait and send new messages. Keep decision history. |
 | Messages after pause do nothing | Run `/rt-resume` and wait for its private confirmation, then send four new messages from two authors. Messages sent while paused were discarded. Resume does not reset cooldowns. |
 | No automatic offer | Verify the running process uses `DETECTION_MODE=auto`. The first check needs four recent plain-text messages from two humans; later checks can run on each new message, at most once every 45 seconds. With FakeProvider, state a concrete choice using “A or B”, “A vs B”, or “A | B” in a message that asks the team to choose, compare, or decide. Attachments/embeds, edits, and bot messages are ignored. |
 | Commands absent | Check the test-server ID, restart to sync, and verify the bot was invited with `applications.commands`. Without guild sync, global propagation can exceed the 20-minute target. |

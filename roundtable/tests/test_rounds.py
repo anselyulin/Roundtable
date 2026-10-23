@@ -8,7 +8,7 @@ import pytest
 from core import prompts
 from core.db import Database, utc_iso
 from core.llm import FakeProvider
-from core.rounds import PreparedQuestion, RoundError, RoundService
+from core.rounds import PreparedQuestion, RoundError, RoundService, duration_suggestions, parse_duration
 
 
 T0 = datetime(2026, 10, 22, 16, tzinfo=timezone.utc)
@@ -57,6 +57,49 @@ def test_start_snapshots_members_utc_deadline_and_status(service):
 def test_three_minute_demo_deadline(service):
     service.deadline_hours = 0.05
     assert start(service).deadline_at == utc_iso(T0 + timedelta(minutes=3))
+
+
+@pytest.mark.parametrize("text, hours", [
+    ("1h", 1), ("36h", 36), ("2d", 48), ("1w", 168), ("90m", 1.5),
+    ("1 hour", 1), ("3 Days", 72), ("1.5h", 1.5), ("5m", 5 / 60), ("30d", 720),
+])
+def test_parse_duration_accepts_relative_lengths(text, hours):
+    assert parse_duration(text) == pytest.approx(hours)
+
+
+@pytest.mark.parametrize("text", ["", "soon", "1", "h", "-1h", "0h", "4m", "31d", "5 weeks", "2026-10-30", "NaNh", "infh"])
+def test_parse_duration_rejects_bad_or_out_of_range_lengths(text):
+    with pytest.raises(RoundError) as error:
+        parse_duration(text)
+    assert error.value.code == "round_deadline"
+
+
+@pytest.mark.parametrize("text", ["5", "1", "2.5", "45", "900", "5 da", "3 hrs", "10 min", "day"])
+def test_every_duration_suggestion_is_accepted(text):
+    assert all(parse_duration(value) for _, value in duration_suggestions(text))
+
+
+@pytest.mark.parametrize("hours", [5 / 60, 36, 720])
+def test_chosen_deadline_persists_and_controls_closure_after_restart(service, hours):
+    record = service.start(200, 102, PreparedQuestion("Which market?", ()), MEMBERS, T0, deadline_hours=hours)
+    deadline = T0 + timedelta(hours=hours)
+    assert record.deadline_at == utc_iso(deadline)
+    restored = Database(":memory:")
+    restored.connection.deserialize(service.db.connection.serialize())
+    try:
+        restarted = RoundService(restored, FakeProvider())
+        saved = restored.get_round(record.id)
+        assert not restarted.ready(saved, deadline - timedelta(microseconds=1))
+        assert restarted.ready(saved, deadline)
+    finally:
+        restored.close()
+
+
+@pytest.mark.parametrize("hours", [0, -1, 721, float("nan"), float("inf")])
+def test_start_rejects_invalid_override_without_creating_round(service, hours):
+    with pytest.raises(RoundError, match="round_deadline"):
+        service.start(200, 102, PreparedQuestion("Which market?", ()), MEMBERS, T0, deadline_hours=hours)
+    assert not service.db.connection.execute("SELECT 1 FROM rounds").fetchone()
 
 
 async def test_response_upsert_and_consent_default(service):

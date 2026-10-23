@@ -521,7 +521,7 @@ class Database:
     def published_prompt_ids(self) -> tuple[int, ...]:
         return tuple(row[0] for row in self.connection.execute("SELECT id FROM decision_prompts WHERE public_message_id IS NOT NULL"))
 
-    def dismiss_decision_prompt(self, prompt_id: int, now: str, cooldown_until: str) -> bool:
+    def dismiss_decision_prompt(self, prompt_id: int, now: str) -> bool:
         with self.connection:
             changed = self.connection.execute(
                 """UPDATE decision_prompts SET status='dismissed',resolved_at=?
@@ -529,11 +529,6 @@ class Database:
             ).rowcount
             if changed:
                 prompt = self.get_decision_prompt(prompt_id)
-                self.connection.execute(
-                    """UPDATE channels SET detection_cooldown_until=CASE
-                    WHEN detection_cooldown_until>? THEN detection_cooldown_until ELSE ? END WHERE channel_id=?""",
-                    (cooldown_until, cooldown_until, prompt.channel_id),
-                )
                 self._increment_metric(prompt.channel_id, "prompts_dismissed")
         return bool(changed)
 

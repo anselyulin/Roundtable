@@ -581,3 +581,40 @@ References: [Google SDK](https://googleapis.github.io/python-genai/),
 - No schema, configuration, persistence, or model-call changes. Tests cover the
   initial display, private submission updates, edits, empty/full counts, larger
   groups, and absence of identities/choices/reasons in the progress embed.
+
+## No thanks dismisses only the current offer
+
+- The user's updated behavior supersedes section 7.2's 60-minute dismissal
+  extension and the earlier step-4 decision. No thanks resolves/disables only
+  that offer, creates no round, and increments prompts_dismissed exactly once.
+  Public/private confirmations now say the round will not start.
+- Preserve the configured normal offer cooldown from the original posting time;
+  dismissal never extends or restarts it. This retains the anti-spam behavior
+  while allowing a later discussion to trigger detection normally.
+- Enforce that cooldown using last_prompt_at and current configuration. Retain
+  detection_cooldown_until for database compatibility, but stop honoring legacy
+  extended timers, so existing 60-minute dismissals also stop blocking detection
+  once the normal cooldown expires. No production database edits or reset of
+  history, metrics, or settings are needed.
+- Tests use FakeProvider and in-memory SQLite to verify no new round, one-shot
+  counters/buttons, normal and late dismissal, restart, legacy timers, configured
+  5/15/90-minute cooldowns, and a subsequent automatic offer.
+
+## Decision deadlines from hosung
+
+- Selectively port the optional /rt-decide deadline argument, relative-duration
+  parser, presets, and autocomplete from origin/hosung commit 42fee89. Exclude
+  its unrelated result-summary, resume, task-announcement, and asset changes.
+  Preserve the current vote-progress visual and No thanks behavior.
+- Custom durations accept minutes, hours, days, and weeks, including decimal
+  amounts and the branch's unit aliases, from five minutes through 30 days.
+  Validate before option extraction and again at the core start boundary. Use
+  an explicit None check so invalid zero overrides cannot silently fall back.
+- Omitting the argument keeps ROUND_DEADLINE_HOURS, including the existing
+  three-minute demo default. Auto-detected/reopened rounds retain that default.
+  Store the chosen deadline in the existing deadline_at field; existing display,
+  scheduler, exact-deadline submission guards, and restart recovery use it.
+- No new environment variables, schema changes, paid calls, or live Discord
+  messages. Tests use FakeProvider/mocks/in-memory SQLite to cover parsing and
+  boundaries, autocomplete and command registration, invalid-input privacy and
+  no model calls, persisted custom deadlines, reminders, closure, and late votes.

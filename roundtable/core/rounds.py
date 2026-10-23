@@ -19,6 +19,9 @@ ANOTHER = "Another option"
 NONE = "None of these"
 HISTORY_PAGE_SIZE = 10
 MAX_REOPEN_OPTIONS = 24  # Discord permits 25 buttons, including None of these.
+MIN_DEADLINE_HOURS, MAX_DEADLINE_HOURS = 5 / 60, 30 * 24
+DEADLINE_PRESETS = (("1 hour", "1h"), ("6 hours", "6h"), ("1 day", "1d"), ("3 days", "3d"), ("1 week", "1w"))
+_DURATION_UNITS = {"m": 1 / 60, "h": 1, "d": 24, "w": 168}
 
 
 class RoundError(Exception):
@@ -31,6 +34,44 @@ class RoundError(Exception):
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def parse_duration(text: str) -> float:
+    """Relative round length such as 90m, 36h, 2d, or "1 week", in hours."""
+    match = re.fullmatch(
+        r"(\d+(?:\.\d+)?)\s*(m|mins?|minutes?|h|hrs?|hours?|d|days?|w|wks?|weeks?)",
+        text.strip().casefold(),
+    )
+    if match is None:
+        raise RoundError("round_deadline")
+    hours = float(match[1]) * _DURATION_UNITS[match[2][0]]
+    if not MIN_DEADLINE_HOURS <= hours <= MAX_DEADLINE_HOURS:
+        raise RoundError("round_deadline")
+    return hours
+
+
+def duration_suggestions(text: str) -> tuple[tuple[str, str], ...]:
+    """(label, value) pairs for a partly typed relative length."""
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([a-z]*)", text.strip().casefold())
+    if match is None:
+        typed = text.strip().casefold()
+        return tuple(preset for preset in DEADLINE_PRESETS if typed in preset[0]) or DEADLINE_PRESETS
+    number, unit = match[1], match[2]
+    amount = float(number)
+    shown = f"{amount:g}"
+    suggestions = []
+    for code, name, aliases in (
+        ("h", "hour", ("hours", "hrs")), ("d", "day", ("days",)),
+        ("w", "week", ("weeks", "wks")), ("m", "minute", ("minutes", "mins")),
+    ):
+        if not any(alias.startswith(unit) for alias in aliases):
+            continue
+        try:
+            parse_duration(f"{number}{code}")
+        except RoundError:
+            continue
+        suggestions.append((f"{shown} {name}{'' if amount == 1 else 's'}", f"{number}{code}"))
+    return tuple(suggestions)
 
 
 def validate_input(text: str, maximum: int) -> str:
@@ -189,16 +230,19 @@ class RoundService:
     def start(
         self, channel_id: str | int, creator_id: str | int, prepared: PreparedQuestion,
         member_ids: tuple[str, ...], now: datetime, *, reopened_from: int | None = None,
+        deadline_hours: float | None = None,
     ) -> RoundRecord:
         self.require_active(channel_id)
         if prepared.generation is not None:
             self.require_current(channel_id, prepared.generation)
         if not member_ids or str(creator_id) not in member_ids:
             raise RoundError("member")
+        if deadline_hours is not None and not MIN_DEADLINE_HOURS <= deadline_hours <= MAX_DEADLINE_HOURS:
+            raise RoundError("round_deadline")
         return self.db.create_round(
             channel_id=str(channel_id), question=prepared.question, options=prepared.options,
             created_by=str(creator_id), created_at=utc_iso(now),
-            deadline_at=utc_iso(now + timedelta(hours=self.deadline_hours)), member_ids=member_ids,
+            deadline_at=utc_iso(now + timedelta(hours=self.deadline_hours if deadline_hours is None else deadline_hours)), member_ids=member_ids,
             reopened_from=reopened_from,
         )
 
