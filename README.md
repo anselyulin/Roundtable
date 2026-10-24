@@ -1,7 +1,7 @@
 # Roundtable
 
-A Discord bot for decision rounds, private clarification, task coordination,
-and aggregate pilot stats.
+A messaging agent for decision rounds, private clarification, task coordination,
+and aggregate pilot stats. MVP currently hosted in Discord.
 
 See the [project README](roundtable/README.md) for setup, configuration, commands,
 tests, and the acceptance audit. The complete specification is in
