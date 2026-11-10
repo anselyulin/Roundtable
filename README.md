@@ -7,3 +7,5 @@ See the [project README](roundtable/README.md) for setup, configuration, command
 tests, and the acceptance audit. The complete specification is in
 [build_spec_discord.md](build_spec_discord.md), and the demo walkthrough is in
 [demo/script.md](roundtable/demo/script.md).
+
+See Roundtable_Pitch_Deck for comprehensive overview.
